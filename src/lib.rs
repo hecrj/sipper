@@ -91,10 +91,8 @@ use std::marker::PhantomData;
 /// ```rust
 /// use sipper::Sipper;
 ///
-/// #[derive(Debug, PartialEq, Eq)]
 /// struct File(Vec<u8>);
 ///
-/// #[derive(Debug, PartialEq, Eq)]
 /// struct Progress(u32);
 ///
 /// fn download(url: &str) -> impl Sipper<File, Progress> {
@@ -108,10 +106,8 @@ use std::marker::PhantomData;
 /// ```rust
 /// # use sipper::{sipper, Sipper};
 /// #
-/// # #[derive(Debug, PartialEq, Eq)]
 /// # struct File(Vec<u8>);
 /// #
-/// # #[derive(Debug, PartialEq, Eq)]
 /// # struct Progress(u32);
 /// #
 /// # fn download(url: &str) -> impl Sipper<File, Progress> {

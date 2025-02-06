@@ -79,10 +79,8 @@ A [`Sipper`] can precisely describe this dichotomy in a type-safe way:
 ```rust
 use sipper::Sipper;
 
-#[derive(Debug, PartialEq, Eq)]
 struct File(Vec<u8>);
 
-#[derive(Debug, PartialEq, Eq)]
 struct Progress(u32);
 
 fn download(url: &str) -> impl Sipper<File, Progress> {
