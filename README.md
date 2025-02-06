@@ -2,10 +2,10 @@
 
 # Sipper
 
-[![Crates.io](https://img.shields.io/crates/v/icebreaker.svg)](https://crates.io/crates/icebreaker)
-[![License](https://img.shields.io/crates/l/icebreaker.svg)](https://github.com/hecrj/icebreaker/blob/master/LICENSE)
-[![Downloads](https://img.shields.io/crates/d/icebreaker.svg)](https://crates.io/crates/icebreaker)
-[![Test Status](https://img.shields.io/github/actions/workflow/status/hecrj/icebreaker/test.yml?branch=master&event=push&label=test)](https://github.com/hecrj/icebreaker/actions)
+[![Crates.io](https://img.shields.io/crates/v/sipper.svg)](https://crates.io/crates/sipper)
+[![License](https://img.shields.io/crates/l/sipper.svg)](https://github.com/hecrj/sipper/blob/master/LICENSE)
+[![Downloads](https://img.shields.io/crates/d/sipper.svg)](https://crates.io/crates/sipper)
+[![Test Status](https://img.shields.io/github/actions/workflow/status/hecrj/sipper/test.yml?branch=master&event=push&label=test)](https://github.com/hecrj/sipper/actions)
 
 A sipper is a [`Future`] that can notify progress.
 </div>
@@ -131,6 +131,7 @@ async fn example(on_progress: mpsc::Sender<Progress>) {
 }
 ```
 
+[`Sipper`]: https://docs.rs/sipper/latest/sipper/trait.Sipper.html
 [`Future`]: https://docs.rs/futures/0.3.31/futures/future/trait.Future.html
 [`Sink`]: https://docs.rs/futures/0.3.31/futures/sink/trait.Sink.html
 [`Stream`]: https://docs.rs/futures/0.3.31/futures/stream/trait.Stream.html
