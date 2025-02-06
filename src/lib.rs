@@ -250,7 +250,7 @@ where
         B: Fn(Sender<Progress>) -> F,
     {
         fn run_(self, on_progress: Sender<Progress>) -> impl Future<Output = F::Output> + Send {
-            (self.builder)(on_progress.into())
+            (self.builder)(on_progress)
         }
     }
 
