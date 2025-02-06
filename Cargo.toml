@@ -1,9 +1,9 @@
 [package]
 name = "sipper"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2021"
 license = "MIT"
-description = "WIP"
+description = "A future that can notify progress"
 
 [dependencies]
 futures = "0.3"
