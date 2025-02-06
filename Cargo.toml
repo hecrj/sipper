@@ -1,0 +1,41 @@
+[package]
+name = "sipper"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+description = "WIP"
+
+[dependencies]
+futures = "0.3"
+
+[dev-dependencies]
+tokio.version = "1.43"
+tokio.features = ["rt", "macros", "time"]
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "deny", priority = -1 }
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+unsafe_code = "deny"
+unused_results = "deny"
+
+[workspace.lints.clippy]
+type-complexity = "allow"
+semicolon_if_nothing_returned = "deny"
+trivially-copy-pass-by-ref = "deny"
+default_trait_access = "deny"
+match-wildcard-for-single-variants = "deny"
+redundant-closure-for-method-calls = "deny"
+filter_map_next = "deny"
+manual_let_else = "deny"
+unused_async = "deny"
+from_over_into = "deny"
+needless_borrow = "deny"
+new_without_default = "deny"
+useless_conversion = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "forbid"
