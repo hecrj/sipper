@@ -41,7 +41,6 @@ enum Download {
 
 fn download(url: &str) -> impl Stream<Item = Download> {
     // ...
-#     futures::stream::once(async { Download::Done(File(Vec::new())) })
 }
 ```
 
@@ -49,21 +48,6 @@ If we now wanted to notify progress and—at the same time—do something with
 the final `File`, we'd need to juggle with the [`Stream`]:
 
 ```rust
-# use futures::Stream;
-#
-# struct File(Vec<u8>);
-#
-# struct Progress(u32);
-#
-# enum Download {
-#    Running(Progress),
-#    Done(File)
-# }
-#
-# fn download(url: &str) -> impl Stream<Item = Download> {
-#     // ...
-#     futures::stream::once(async { Download::Done(File(Vec::new())) })
-# }
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 
@@ -103,25 +87,12 @@ struct Progress(u32);
 
 fn download(url: &str) -> impl Sipper<File, Progress> {
     // ...
-#     sipper::sipper(|_| futures::future::ready(File(Vec::new())))
 }
 ```
 
 Which can then be easily used with any [`Sink`]:
 
 ```rust
-# use sipper::{sipper, Sipper};
-#
-# #[derive(Debug, PartialEq, Eq)]
-# struct File(Vec<u8>);
-#
-# #[derive(Debug, PartialEq, Eq)]
-# struct Progress(u32);
-#
-# fn download(url: &str) -> impl Sipper<File, Progress> {
-#     sipper(|_| futures::future::ready(File(Vec::new())))
-# }
-#
 use futures::channel::mpsc;
 
 async fn example(on_progress: mpsc::Sender<Progress>) {
