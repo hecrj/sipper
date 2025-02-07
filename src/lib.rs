@@ -1,6 +1,7 @@
 //! Futures that notify progress.
-use futures::future;
-use futures::{Future, Sink, SinkExt};
+use futures::channel::mpsc;
+use futures::{Future, Sink};
+use tokio::task;
 
 use std::marker::PhantomData;
 
@@ -130,21 +131,21 @@ pub trait Sipper<Output, Progress = Output> {
 
     /// Returns a [`Future`] that runs the [`Sipper`], sending any progress through the given [`Sender`].
     ///
-    /// This is just a generic version of [`run_`], for convenience.
+    /// This is a generic version of [`run_`], for convenience.
     ///
     /// [`run_`]: Self::run_
-    fn run(self, on_progress: impl IntoSender<Progress>) -> impl Future<Output = Output> + Send
+    fn run(self, on_progress: impl Into<Sender<Progress>>) -> impl Future<Output = Output> + Send
     where
         Self: Sized,
     {
-        self.run_(on_progress.into_sender())
+        self.run_(on_progress.into())
     }
 
     /// Transforms the progress of a [`Sipper`] with the given function; returning a new [`Sipper`].
     fn map<T>(self, f: impl Fn(Progress) -> T + Send + 'static) -> impl Sipper<Output, T>
     where
         Self: Sized,
-        Progress: 'static,
+        Progress: Send + 'static,
         T: Send + 'static,
     {
         struct Map<Progress, S, O, F, T>
@@ -161,22 +162,12 @@ pub trait Sipper<Output, Progress = Output> {
         where
             S: Sipper<O, Progress>,
             F: Fn(Progress) -> T + Send,
-            Progress: 'static,
+            Progress: Send + 'static,
             T: Send + 'static,
             F: 'static,
         {
             fn run_(self, on_progress: Sender<T>) -> impl Future<Output = O> {
-                let mapper = self.mapper;
-
-                let on_progress = Sender {
-                    sink: Box::new(
-                        on_progress
-                            .sink
-                            .with(move |progress| future::ready(Ok(mapper(progress)))),
-                    ),
-                };
-
-                self.sipper.run_(on_progress)
+                self.sipper.run_(on_progress.map(self.mapper))
             }
         }
 
@@ -189,36 +180,78 @@ pub trait Sipper<Output, Progress = Output> {
 }
 
 /// A sender used to notify the progress of some [`Sipper`].
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct Sender<T> {
-    sink: Box<dyn Sink<T, Error = ()> + Unpin + Send>,
+    raw: mpsc::Sender<T>,
 }
 
 impl<T> Sender<T> {
+    /// Creates a new [`Sender`] from an [`mpsc::Sender`].
+    pub fn new(sender: mpsc::Sender<T>) -> Self {
+        Self { raw: sender }
+    }
+
+    /// Creates a new [`Sender`] from a [`Sink`].
+    pub fn from_sink<S>(sink: S) -> Self
+    where
+        S: Sink<T> + Send + 'static,
+        S::Error: Send + 'static,
+        T: Send + 'static,
+    {
+        use futures::StreamExt;
+
+        let (sender, receiver) = mpsc::channel(0);
+        let _handle = task::spawn(receiver.map(Ok).forward(sink));
+
+        Sender { raw: sender }
+    }
+
     /// Sends a value through the [`Sender`].
     ///
     /// Since we are only notifying progress, any channel errors
     /// are discarded.
     pub async fn send(&mut self, value: T) {
-        let _ = self.sink.send(value).await;
+        use futures::SinkExt;
+
+        let _ = self.raw.send(value).await;
+    }
+
+    /// Transforms the values that can go through this [`Sender`]; returning a new [`Sender`].
+    pub fn map<A>(&self, f: impl Fn(A) -> T + Send + 'static) -> Sender<A>
+    where
+        T: Send + 'static,
+        A: Send + 'static,
+    {
+        use futures::StreamExt;
+
+        let (sender, receiver) = mpsc::channel(0);
+
+        let _handle = task::spawn(
+            receiver
+                .map(move |value| Ok(f(value)))
+                .forward(self.raw.clone()),
+        );
+
+        Sender { raw: sender }
     }
 }
 
-/// A trait used to turn a type into a [`Sender`].
-///
-/// It is automatically implemented for all types that implement [`Sink`].
-pub trait IntoSender<T> {
-    /// Turns the type into a [`Sender`].
-    fn into_sender(self) -> Sender<T>;
+impl<T> From<mpsc::Sender<T>> for Sender<T> {
+    fn from(sender: mpsc::Sender<T>) -> Self {
+        Self { raw: sender }
+    }
 }
 
-impl<S, T> IntoSender<T> for S
-where
-    S: Sink<T> + Unpin + Send + 'static,
-{
-    fn into_sender(self) -> Sender<T> {
-        Sender {
-            sink: Box::new(self.sink_map_err(|_| ())),
+impl<T> From<&Sender<T>> for Sender<T> {
+    fn from(sender: &Sender<T>) -> Self {
+        sender.clone()
+    }
+}
+
+impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            raw: self.raw.clone(),
         }
     }
 }
