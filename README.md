@@ -32,7 +32,7 @@ use futures::Stream;
 
 struct File(Vec<u8>);
 
-struct Progress(u32);
+type Progress = u32;
 
 enum Download {
    Running(Progress),
@@ -51,13 +51,13 @@ the final `File`, we'd need to juggle with the [`Stream`]:
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 
-async fn example(mut on_progress: mpsc::Sender<Progress>) {
+async fn example() {
    let mut file_download = download("https://iced.rs/logo.svg").boxed();
 
    while let Some(download) = file_download.next().await {
        match download {
            Download::Running(progress) => {
-               let _ = on_progress.send(progress).await;
+               println!("{progress}");
            }
            Download::Done(file) => {
                // Do something with file...
@@ -69,10 +69,6 @@ async fn example(mut on_progress: mpsc::Sender<Progress>) {
 }
 ```
 
-While we could rewrite the previous snippet using `loop`, `expect`, and `break` to get the
-final file out of the [`Stream`]. We would still be introducing runtime errors and, simply put,
-working around the fact that a [`Stream`] does not encode the idea of a final value.
-
 ## The Chad Sipper
 A [`Sipper`] can precisely describe this dichotomy in a type-safe way:
 
@@ -81,22 +77,29 @@ use sipper::Sipper;
 
 struct File(Vec<u8>);
 
-struct Progress(u32);
+type Progress = u32
 
 fn download(url: &str) -> impl Sipper<File, Progress> {
     // ...
 }
 ```
 
-Which can then be easily used with any [`Sink`]:
+Which can then be easily ~~used~~ sipped in a type-safe way:
 
 ```rust
 use futures::channel::mpsc;
 
-async fn example(on_progress: mpsc::Sender<Progress>) {
-    let file = download("https://iced.rs/logo.svg").run(on_progress).await;
+async fn example() -> File {
+   let mut download = download("https://iced.rs/logo.svg").sip();
 
-    // We are guaranteed to have a `File` here!
+   while let Some(progress) = download.next().await {
+       println!("{progress}");
+   }
+
+   let logo = download.finish().await;
+
+   // We are guaranteed to have a File here!
+   logo
 }
 ```
 
