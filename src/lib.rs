@@ -54,10 +54,8 @@ pub use futures::never::Never;
 /// #
 /// # struct File(Vec<u8>);
 /// #
-/// # struct Progress(u32);
-/// #
 /// # enum Download {
-/// #    Running(Progress),
+/// #    Running(u32),
 /// #    Done(File)
 /// # }
 /// #
@@ -68,13 +66,13 @@ pub use futures::never::Never;
 /// use futures::{SinkExt, StreamExt};
 /// use futures::channel::mpsc;
 ///
-/// async fn example(mut on_progress: mpsc::Sender<Progress>) {
+/// async fn example() {
 ///    let mut file_download = download("https://iced.rs/logo.svg").boxed();
 ///
 ///    while let Some(download) = file_download.next().await {
 ///        match download {
 ///            Download::Running(progress) => {
-///                let _ = on_progress.send(progress).await;
+///                println!("{progress}");
 ///            }
 ///            Download::Done(file) => {
 ///                // Do something with file...
@@ -106,25 +104,30 @@ pub use futures::never::Never;
 /// }
 /// ```
 ///
-/// Which can then be easily used with any [`Sink`]:
+/// Which can then be easily used in a type-safe way:
 ///
 /// ```rust
 /// # use sipper::{sipper, Sipper};
 /// #
 /// # struct File(Vec<u8>);
 /// #
-/// # struct Progress(u32);
-/// #
-/// # fn download(url: &str) -> impl Sipper<File, Progress> {
+/// # fn download(url: &str) -> impl Sipper<File, u32> {
 /// #     sipper(|_| futures::future::ready(File(Vec::new())))
 /// # }
 /// #
 /// use futures::channel::mpsc;
 ///
-/// async fn example(on_progress: mpsc::Sender<Progress>) {
-///     let file = download("https://iced.rs/logo.svg").run(on_progress).await;
+/// async fn example() -> File {
+///     let mut download = download("https://iced.rs/logo.svg").sip();
+///
+///     while let Some(progress) = download.next().await {
+///         println!("{progress}");
+///     }
+///
+///     let logo = download.finish().await;
 ///
 ///     // We are guaranteed to have a `File` here!
+///     logo
 /// }
 /// ```
 ///
@@ -274,11 +277,11 @@ impl<Output, Progress> Sip<'_, Output, Progress> {
             return output;
         }
 
-        let Either::Left(output) = self.stream.next().await.unwrap() else {
-            unreachable!()
-        };
+        // Discard all progress left
+        while let Some(_) = self.next().await {}
 
-        output
+        // We are guaranteed to have an output
+        self.output.expect("A sipper must produce output!")
     }
 }
 
@@ -482,8 +485,7 @@ mod tests {
     use tokio::task;
     use tokio::test;
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct Progress(u32);
+    type Progress = u32;
 
     #[derive(Debug, PartialEq, Eq)]
     struct File(Vec<u8>);
@@ -496,7 +498,7 @@ mod tests {
     fn download() -> impl Sipper<File, Progress> {
         sipper(|mut sender| async move {
             for i in 0..=100 {
-                sender.send(Progress(i)).await;
+                sender.send(i).await;
             }
 
             File(vec![1, 2, 3, 4])
@@ -506,7 +508,7 @@ mod tests {
     fn try_download() -> impl Straw<File, Progress, Error> {
         sipper(|mut sender| async move {
             for i in 0..=100 {
-                sender.send(Progress(i)).await;
+                sender.send(i).await;
             }
 
             Err(Error::Failed)
@@ -524,7 +526,7 @@ mod tests {
             .await
             .expect("Collect progress")
             .into_iter()
-            .eq((0..=100).map(Progress)));
+            .eq(0..=100));
 
         assert_eq!(file, File(vec![1, 2, 3, 4]));
     }
@@ -538,7 +540,7 @@ mod tests {
 
         while let Some(progress) = download.next().await {
             i += 1;
-            last_progress = Some(progress.0);
+            last_progress = Some(progress);
         }
 
         let file = download.finish().await;
@@ -546,6 +548,17 @@ mod tests {
         assert_eq!(i, 101);
         assert_eq!(last_progress, Some(100));
         assert_eq!(file, File(vec![1, 2, 3, 4]));
+    }
+
+    #[test]
+    async fn it_sips_partially() {
+        let mut download = download().sip();
+
+        assert_eq!(download.next().await, Some(0));
+        assert_eq!(download.next().await, Some(1));
+        assert_eq!(download.next().await, Some(2));
+        assert_eq!(download.next().await, Some(3));
+        assert_eq!(download.finish().await, File(vec![1, 2, 3, 4]));
     }
 
     #[test]
@@ -566,7 +579,7 @@ mod tests {
 
         while let Some(progress) = download.next().await {
             i += 1;
-            last_progress = Some(progress.0);
+            last_progress = Some(progress);
         }
 
         let file = download.finish().await;
