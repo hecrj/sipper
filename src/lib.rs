@@ -1,9 +1,8 @@
 //! Futures that notify progress.
 use futures::channel::mpsc;
-use futures::future::Either;
+use futures::future::{BoxFuture, Either};
 use futures::stream;
-use futures::{Future, Sink, Stream, StreamExt};
-use tokio::task;
+use futures::{Future, FutureExt, Stream, StreamExt};
 
 use std::marker::PhantomData;
 
@@ -132,6 +131,7 @@ pub use futures::never::Never;
 /// ```
 ///
 /// [`Stream`]: futures::Stream
+/// [`Sink`]: futures::Sink
 pub trait Sipper<Output, Progress = Output>: Sized {
     /// The future returned by this [`Sipper`].
     type Future: Future<Output = Output> + Send;
@@ -156,8 +156,8 @@ pub trait Sipper<Output, Progress = Output>: Sized {
     fn sip<'a>(self) -> Sip<'a, Output, Progress>
     where
         Self::Future: 'a,
-        Output: 'static,
-        Progress: Send + 'static,
+        Output: 'a,
+        Progress: Send + 'a,
     {
         let (sender, receiver) = Sender::channel(1);
         let worker = self.run_(sender);
@@ -175,41 +175,111 @@ pub trait Sipper<Output, Progress = Output>: Sized {
     }
 
     /// Transforms the progress of a [`Sipper`] with the given function; returning a new [`Sipper`].
-    fn map<T>(
+    fn map<'a, T>(
         self,
         f: impl FnMut(Progress) -> T + Send + 'static,
-    ) -> impl Sipper<Output, T, Future = Self::Future>
+    ) -> impl Sipper<Output, T, Future = BoxFuture<'a, Output>>
     where
         Self: Sized,
-        Progress: Send + 'static,
-        T: Send + 'static,
+        Self::Future: 'a,
+        Progress: Send + 'a,
+        T: Send + 'a,
+        Output: Send + 'a,
     {
-        struct Map<Progress, S, O, F, T>
+        struct Map<'a, Progress, S, O, F, T>
         where
             S: Sipper<O, Progress>,
             F: FnMut(Progress) -> T + Send,
         {
             sipper: S,
             mapper: F,
-            _types: PhantomData<(Progress, O, T)>,
+            _types: PhantomData<(&'a Progress, O, T)>,
         }
 
-        impl<Progress, S, O, F, T> Sipper<O, T> for Map<Progress, S, O, F, T>
+        impl<'a, Progress, S, O, F, T> Sipper<O, T> for Map<'a, Progress, S, O, F, T>
         where
             S: Sipper<O, Progress>,
-            F: FnMut(Progress) -> T + Send,
-            Progress: Send + 'static,
-            T: Send + 'static,
-            F: 'static,
+            S::Future: 'a,
+            F: FnMut(Progress) -> T + Send + 'a,
+            Progress: Send + 'a,
+            T: Send + 'a,
+            O: Send + 'a,
         {
-            type Future = S::Future;
+            type Future = BoxFuture<'a, O>;
 
-            fn run_(self, on_progress: Sender<T>) -> Self::Future {
-                self.sipper.run_(on_progress.map(self.mapper))
+            fn run_(mut self, mut on_progress: Sender<T>) -> Self::Future {
+                let mut sip = self.sipper.sip();
+
+                async move {
+                    while let Some(progress) = sip.next().await {
+                        on_progress.send((self.mapper)(progress)).await;
+                    }
+
+                    sip.finish().await
+                }
+                .boxed()
             }
         }
 
         Map {
+            sipper: self,
+            mapper: f,
+            _types: PhantomData,
+        }
+    }
+
+    /// Transforms the progress of a [`Sipper`] with the given function; returning a new [`Sipper`].
+    ///
+    /// `None` values will be discarded and not notified.
+    fn filter_map<'a, T>(
+        self,
+        f: impl FnMut(Progress) -> Option<T> + Send + 'static,
+    ) -> impl Sipper<Output, T, Future = BoxFuture<'a, Output>>
+    where
+        Self: Sized,
+        Self::Future: 'a,
+        Progress: Send + 'a,
+        T: Send + 'a,
+        Output: Send + 'a,
+    {
+        struct FilterMap<'a, Progress, S, O, F, T>
+        where
+            S: Sipper<O, Progress>,
+            F: FnMut(Progress) -> Option<T> + Send,
+        {
+            sipper: S,
+            mapper: F,
+            _types: PhantomData<(&'a Progress, O, T)>,
+        }
+
+        impl<'a, Progress, S, O, F, T> Sipper<O, T> for FilterMap<'a, Progress, S, O, F, T>
+        where
+            S: Sipper<O, Progress>,
+            S::Future: 'a,
+            F: FnMut(Progress) -> Option<T> + Send + 'a,
+            Progress: Send + 'a,
+            T: Send + 'a,
+            O: Send + 'a,
+        {
+            type Future = BoxFuture<'a, O>;
+
+            fn run_(mut self, mut on_progress: Sender<T>) -> Self::Future {
+                let mut sip = self.sipper.sip();
+
+                async move {
+                    while let Some(progress) = sip.next().await {
+                        if let Some(progress) = (self.mapper)(progress) {
+                            on_progress.send(progress).await;
+                        }
+                    }
+
+                    sip.finish().await
+                }
+                .boxed()
+            }
+        }
+
+        FilterMap {
             sipper: self,
             mapper: f,
             _types: PhantomData,
@@ -313,21 +383,6 @@ impl<T> Sender<T> {
         Self(Sender_::Null)
     }
 
-    /// Creates a new [`Sender`] from a [`Sink`].
-    pub fn from_sink<S>(sink: S) -> Self
-    where
-        S: Sink<T> + Send + 'static,
-        S::Error: Send + 'static,
-        T: Send + 'static,
-    {
-        use futures::StreamExt;
-
-        let (sender, receiver) = mpsc::channel(0);
-        let _handle = task::spawn(receiver.map(Ok).forward(sink));
-
-        Self(Sender_::Mpsc(sender))
-    }
-
     /// Sends a value through the [`Sender`].
     ///
     /// Since we are only notifying progress, any channel errors
@@ -338,51 +393,6 @@ impl<T> Sender<T> {
         if let Self(Sender_::Mpsc(raw)) = self {
             let _ = raw.send(value).await;
         }
-    }
-
-    /// Transforms the values that can go through this [`Sender`]; returning a new [`Sender`].
-    pub fn map<A>(&self, mut f: impl FnMut(A) -> T + Send + 'static) -> Sender<A>
-    where
-        T: Send + 'static,
-        A: Send + 'static,
-    {
-        use futures::StreamExt;
-
-        let Self(Sender_::Mpsc(raw)) = self else {
-            return Sender(Sender_::Null);
-        };
-
-        let (sender, receiver) = mpsc::channel(0);
-
-        let _handle = task::spawn(receiver.map(move |value| Ok(f(value))).forward(raw.clone()));
-
-        Sender(Sender_::Mpsc(sender))
-    }
-
-    /// Transforms the values that can go through this [`Sender`]; returning a new [`Sender`].
-    ///
-    /// If `None` is returned, the value will be discarded.
-    pub fn filter_map<A>(&self, f: impl Fn(A) -> Option<T> + Send + 'static) -> Sender<A>
-    where
-        T: Send + 'static,
-        A: Send + 'static,
-    {
-        use futures::future;
-        use futures::StreamExt;
-
-        let Self(Sender_::Mpsc(raw)) = self else {
-            return Sender(Sender_::Null);
-        };
-
-        let (sender, receiver) = mpsc::channel(0);
-
-        let _handle = task::spawn(
-            receiver
-                .filter_map(move |value| future::ready(f(value).map(Ok)))
-                .forward(raw.clone()),
-        );
-
-        Sender(Sender_::Mpsc(sender))
     }
 }
 
