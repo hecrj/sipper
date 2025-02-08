@@ -1,11 +1,13 @@
 //! Futures that notify progress.
 use futures::channel::mpsc;
-use futures::future::{self, Either};
+use futures::future::Either;
 use futures::stream;
 use futures::{Future, Sink, Stream, StreamExt};
 use tokio::task;
 
 use std::marker::PhantomData;
+
+pub use futures::never::Never;
 
 /// A sipper is a [`Future`] that can notify progress.
 ///
@@ -139,7 +141,7 @@ pub trait Sipper<Output, Progress = Output>: Sized {
     /// This is a generic version of [`run_`], for convenience.
     ///
     /// [`run_`]: Self::run_
-    fn run(self, on_progress: impl Into<Sender<Progress>>) -> Self::Future {
+    fn run(self, on_progress: impl Into<Sender<Progress>>) -> impl Future<Output = Output> + Send {
         self.run_(on_progress.into())
     }
 
@@ -167,20 +169,6 @@ pub trait Sipper<Output, Progress = Output>: Sized {
             output: None,
             _progress: PhantomData,
         }
-    }
-
-    /// Returns a [`Stream`] of only the progress notifications of the [`Sipper`].
-    fn progress(self) -> impl Stream<Item = Progress> + Send
-    where
-        Progress: Send,
-    {
-        let (sender, receiver) = Sender::channel(1);
-        let worker = self.run_(sender);
-
-        stream::select(
-            receiver,
-            stream::once(worker).filter_map(|_| future::ready(None)),
-        )
     }
 
     /// Transforms the progress of a [`Sipper`] with the given function; returning a new [`Sipper`].
@@ -226,6 +214,19 @@ pub trait Sipper<Output, Progress = Output>: Sized {
     }
 }
 
+/// A [`Straw`] is a [`Sipper`] that can fail.
+///
+/// This is an extension trait of [`Sipper`], for convenience.
+pub trait Straw<Output, Progress = Output, Error = Never>:
+    Sipper<Result<Output, Error>, Progress>
+{
+}
+
+impl<S, Output, Progress, Error> Straw<Output, Progress, Error> for S where
+    S: Sipper<Result<Output, Error>, Progress>
+{
+}
+
 /// A [`Sip`] lets you run a [`Sipper`] one step at a time.
 ///
 /// Every [`next`] call produces some progress; while [`finish`]
@@ -235,7 +236,7 @@ pub trait Sipper<Output, Progress = Output>: Sized {
 /// [`next`]: Self::next
 /// [`finish`]: Self::finish
 #[allow(missing_debug_implementations)]
-pub struct Sip<'a, Output, Progress> {
+pub struct Sip<'a, Output, Progress = Output> {
     stream: stream::BoxStream<'a, Either<Output, Progress>>,
     output: Option<Output>,
     _progress: PhantomData<Progress>,
@@ -409,6 +410,21 @@ impl<T> Clone for Sender<T> {
     }
 }
 
+/// A trait that can only be implemented by types with no values, like
+/// [`Never`].
+///
+/// It is a useful trait to coerce error generics in a type safe way.
+pub trait NeverError {
+    /// A method that can never be called!
+    fn never<T>(self) -> T;
+}
+
+impl NeverError for Never {
+    fn never<T>(self) -> T {
+        match self {}
+    }
+}
+
 /// Creates a new [`Sipper`] from the given async closure, which receives
 /// a [`Sender`] that can be used to notify progress asynchronously.
 pub fn sipper<Progress, F>(
@@ -466,24 +482,39 @@ mod tests {
     use tokio::task;
     use tokio::test;
 
+    #[derive(Debug, PartialEq, Eq)]
+    struct Progress(u32);
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct File(Vec<u8>);
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Error {
+        Failed,
+    }
+
+    fn download() -> impl Sipper<File, Progress> {
+        sipper(|mut sender| async move {
+            for i in 0..=100 {
+                sender.send(Progress(i)).await;
+            }
+
+            File(vec![1, 2, 3, 4])
+        })
+    }
+
+    fn try_download() -> impl Straw<File, Progress, Error> {
+        sipper(|mut sender| async move {
+            for i in 0..=100 {
+                sender.send(Progress(i)).await;
+            }
+
+            Err(Error::Failed)
+        })
+    }
+
     #[test]
     async fn it_works() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct Progress(u32);
-
-        #[derive(Debug, PartialEq, Eq)]
-        struct File(Vec<u8>);
-
-        fn download() -> impl Sipper<File, Progress> {
-            sipper(|mut sender| async move {
-                for i in 0..=100 {
-                    sender.send(Progress(i)).await;
-                }
-
-                File(vec![1, 2, 3, 4])
-            })
-        }
-
         let (sender, receiver) = mpsc::channel(1);
 
         let progress = task::spawn(receiver.collect::<Vec<_>>());
@@ -500,22 +531,6 @@ mod tests {
 
     #[test]
     async fn it_sips() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct Progress(u32);
-
-        #[derive(Debug, PartialEq, Eq)]
-        struct File(Vec<u8>);
-
-        fn download() -> impl Sipper<File, Progress> {
-            sipper(|mut sender| async move {
-                for i in 0..=100 {
-                    sender.send(Progress(i)).await;
-                }
-
-                File(vec![1, 2, 3, 4])
-            })
-        }
-
         let mut i = 0;
         let mut last_progress = None;
 
@@ -534,21 +549,30 @@ mod tests {
     }
 
     #[test]
-    async fn it_is_send() {
-        fn download() -> impl Sipper<u32> {
-            sipper(|mut sender| async move {
-                for i in 0..=100 {
-                    sender.send(i).await;
-                }
-
-                100
-            })
-        }
-
+    async fn it_can_be_streamed() {
         fn uses_stream<T>(_stream: impl Stream<Item = T> + Send) {
             // Do nothing
         }
 
-        uses_stream(stream(download()));
+        uses_stream(stream(download().map(|_| File(vec![]))));
+    }
+
+    #[test]
+    async fn it_can_fail() {
+        let mut i = 0;
+        let mut last_progress = None;
+
+        let mut download = try_download().sip();
+
+        while let Some(progress) = download.next().await {
+            i += 1;
+            last_progress = Some(progress.0);
+        }
+
+        let file = download.finish().await;
+
+        assert_eq!(i, 101);
+        assert_eq!(last_progress, Some(100));
+        assert_eq!(file, Err(Error::Failed));
     }
 }
