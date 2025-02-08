@@ -63,7 +63,6 @@ pub use futures::never::Never;
 /// #     futures::stream::once(async { Download::Done(File(Vec::new())) })
 /// # }
 /// use futures::{SinkExt, StreamExt};
-/// use futures::channel::mpsc;
 ///
 /// async fn example() {
 ///    let mut file_download = download("https://iced.rs/logo.svg").boxed();
@@ -114,8 +113,6 @@ pub use futures::never::Never;
 /// #     sipper(|_| futures::future::ready(File(Vec::new())))
 /// # }
 /// #
-/// use futures::channel::mpsc;
-///
 /// async fn example() -> File {
 ///     let mut download = download("https://iced.rs/logo.svg").sip();
 ///

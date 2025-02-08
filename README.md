@@ -48,8 +48,7 @@ If we now wanted to notify progress and—at the same time—do something with
 the final `File`, we'd need to juggle with the [`Stream`]:
 
 ```rust
-use futures::channel::mpsc;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 
 async fn example() {
    let mut file_download = download("https://iced.rs/logo.svg").boxed();
@@ -87,8 +86,6 @@ fn download(url: &str) -> impl Sipper<File, Progress> {
 Which can then be easily ~~used~~ sipped in a type-safe way:
 
 ```rust
-use futures::channel::mpsc;
-
 async fn example() -> File {
    let mut download = download("https://iced.rs/logo.svg").sip();
 
