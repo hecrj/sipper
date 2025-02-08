@@ -2,6 +2,7 @@
 
 # Sipper
 
+[![Documentation](https://docs.rs/sipper/badge.svg)](https://docs.rs/sipper)
 [![Crates.io](https://img.shields.io/crates/v/sipper.svg)](https://crates.io/crates/sipper)
 [![License](https://img.shields.io/crates/l/sipper.svg)](https://github.com/hecrj/sipper/blob/master/LICENSE)
 [![Downloads](https://img.shields.io/crates/d/sipper.svg)](https://crates.io/crates/sipper)
@@ -76,7 +77,7 @@ use sipper::Sipper;
 
 struct File(Vec<u8>);
 
-type Progress = u32
+type Progress = u32;
 
 fn download(url: &str) -> impl Sipper<File, Progress> {
     // ...
