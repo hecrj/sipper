@@ -278,7 +278,7 @@ impl<Output, Progress> Sip<'_, Output, Progress> {
         }
 
         // Discard all progress left
-        while let Some(_) = self.next().await {}
+        while self.next().await.is_some() {}
 
         // We are guaranteed to have an output
         self.output.expect("A sipper must produce output!")
