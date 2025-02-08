@@ -193,14 +193,13 @@ use futures::stream::FuturesOrdered;
 
 fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
     sipper(move |progress| async move {
-        let downloads =
-            FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
-                download(url)
-                    .map(move |progress| (id, progress))
-                    .run(&progress)
-            }));
-
-        downloads.collect().await
+        FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
+            download(url)
+                .map(move |progress| (id, progress))
+                .run(&progress)
+        }))
+        .collect()
+        .await
     })
 }
 ```

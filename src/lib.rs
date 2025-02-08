@@ -608,14 +608,13 @@ mod tests {
 
         fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
             sipper(move |progress| async move {
-                let downloads =
-                    FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
-                        download(url)
-                            .map(move |progress| (id, progress))
-                            .run(&progress)
-                    }));
-
-                downloads.collect().await
+                FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
+                    download(url)
+                        .map(move |progress| (id, progress))
+                        .run(&progress)
+                }))
+                .collect()
+                .await
             })
         }
 
@@ -631,6 +630,6 @@ mod tests {
         let files = download.finish().await;
 
         assert_eq!(i, 202);
-        assert_eq!(files, vec![File(vec![1, 2, 3, 4]), File(vec![1, 2, 3, 4])])
+        assert_eq!(files, vec![File(vec![1, 2, 3, 4]), File(vec![1, 2, 3, 4])]);
     }
 }
