@@ -2,11 +2,11 @@
 use futures::channel::mpsc;
 use futures::future::{BoxFuture, Either};
 use futures::stream;
-use futures::{Future, FutureExt, Stream, StreamExt};
 
 use std::marker::PhantomData;
 
 pub use futures::never::Never;
+pub use futures::{Future, FutureExt, Stream, StreamExt};
 
 /// A sipper is a [`Future`] that can notify progress.
 ///
