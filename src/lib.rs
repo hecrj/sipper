@@ -502,8 +502,10 @@ mod tests {
         Failed,
     }
 
-    fn download() -> impl Sipper<File, Progress> {
-        sipper(|mut sender| async move {
+    fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
+        sipper(move |mut sender| async move {
+            let _url = url;
+
             for i in 0..=100 {
                 sender.send(i).await;
             }
@@ -512,9 +514,11 @@ mod tests {
         })
     }
 
-    fn try_download() -> impl Straw<File, Progress, Error> {
-        sipper(|mut sender| async move {
-            for i in 0..=100 {
+    fn try_download(url: &str) -> impl Straw<File, Progress, Error> + '_ {
+        sipper(move |mut sender| async move {
+            let _url = url;
+
+            for i in 0..=42 {
                 sender.send(i).await;
             }
 
@@ -527,7 +531,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel(1);
 
         let progress = task::spawn(receiver.collect::<Vec<_>>());
-        let file = download().run(sender).await;
+        let file = download("https://iced.rs/logo.svg").run(sender).await;
 
         assert!(progress
             .await
@@ -543,7 +547,7 @@ mod tests {
         let mut i = 0;
         let mut last_progress = None;
 
-        let mut download = download().sip();
+        let mut download = download("https://iced.rs/logo.svg").sip();
 
         while let Some(progress) = download.next().await {
             i += 1;
@@ -559,7 +563,7 @@ mod tests {
 
     #[test]
     async fn it_sips_partially() {
-        let mut download = download().sip();
+        let mut download = download("https://iced.rs/logo.svg").sip();
 
         assert_eq!(download.next().await, Some(0));
         assert_eq!(download.next().await, Some(1));
@@ -574,7 +578,9 @@ mod tests {
             // Do nothing
         }
 
-        uses_stream(stream(download().map(|_| File(vec![]))));
+        uses_stream(stream(
+            download("https://iced.rs/logo.svg").map(|_| File(vec![])),
+        ));
     }
 
     #[test]
@@ -582,7 +588,7 @@ mod tests {
         let mut i = 0;
         let mut last_progress = None;
 
-        let mut download = try_download().sip();
+        let mut download = try_download("https://iced.rs/logo.svg").sip();
 
         while let Some(progress) = download.next().await {
             i += 1;
@@ -591,8 +597,40 @@ mod tests {
 
         let file = download.finish().await;
 
-        assert_eq!(i, 101);
-        assert_eq!(last_progress, Some(100));
+        assert_eq!(i, 43);
+        assert_eq!(last_progress, Some(42));
         assert_eq!(file, Err(Error::Failed));
+    }
+
+    #[test]
+    async fn it_composes_nicely() {
+        use futures::stream::FuturesOrdered;
+
+        fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+            sipper(move |progress| async move {
+                let downloads =
+                    FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
+                        download(url)
+                            .map(move |progress| (id, progress))
+                            .run(&progress)
+                    }));
+
+                downloads.collect().await
+            })
+        }
+
+        let mut download =
+            download_all(&["https://iced.rs/logo.svg", "https://iced.rs/logo.white.svg"]).sip();
+
+        let mut i = 0;
+
+        while let Some(_progress) = download.next().await {
+            i += 1;
+        }
+
+        let files = download.finish().await;
+
+        assert_eq!(i, 202);
+        assert_eq!(files, vec![File(vec![1, 2, 3, 4]), File(vec![1, 2, 3, 4])])
     }
 }

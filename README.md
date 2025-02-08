@@ -19,7 +19,7 @@ same.
 [`Sipper`] should be chosen over [`Stream`] when the final value produced—the
 end of the task—is important and inherently different from the other values.
 
-# An example
+# An Example
 An example of this could be a file download. When downloading a file, the progress
 that must be notified is normally a bunch of statistics related to the download; but
 when the download finishes, the contents of the file need to also be provided.
@@ -101,7 +101,118 @@ async fn example() -> File {
 }
 ```
 
+## The Delicate Straw
+A [`Straw`] is a [`Sipper`] that can fail:
+
+```rust
+enum Error {
+    Failed,
+}
+
+fn try_download(url: &str) -> impl Straw<File, Progress, Error> {
+    // ...
+}
+
+async fn example() -> Result<File, Error> {
+   let mut download = try_download("https://iced.rs/logo.svg").sip();
+
+   while let Some(progress) = download.next().await {
+       println!("{progress}");
+   }
+
+   let logo = download.finish().await?;
+
+   // We are guaranteed to have a File here!
+   Ok(logo)
+}
+```
+
+Pretty much the same! It's quite easy to add error handling to an existing [`Sipper`].
+In fact, [`Straw`] is actually just an extension trait of a [`Sipper`] with a `Result` as output.
+Therefore, all the [`Sipper`] methods are available for [`Straw`] as well.
+
+## The Great Builder
+You can build a [`Sipper`] with the [`sipper`] function. It takes a closure that receives
+a [`Sender`]—for sending progress updates—and must return a [`Future`] producing the output.
+
+```rust
+use sipper::{sipper, Sipper};
+
+fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
+    sipper(|mut progress| async move {
+        // Perform async request here...
+        let download = /* ... */;
+
+        while let Some(chunk) = download.chunk().await {
+            // ...
+            // Send updates when needed
+            progress.send(/* ... */).await;
+
+        }
+
+        File(/* ... */)
+    })
+}
+```
+
+## The Fancy Composition
+A [`Sipper`] supports a bunch of methods for easy composition; like [`map`], [`filter_map`],
+and [`run`].
+
+For instance, let's say we wanted to build a new function that downloads a bunch of files
+instead of just one:
+
+```rust
+fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+    sipper(move |progress| async move {
+        let mut files = Vec::new();
+
+        for (id, url) in urls.iter().enumerate() {
+            let file = download(url)
+                .map(move |progress| (id, progress))
+                .run(&progress)
+                .await;
+
+            files.push(file);
+        }
+
+        files
+    })
+}
+```
+
+As you can see, we just leverage [`map`] to introduce the download index with the progress
+and [`run`] to drive the [`Sipper`] to completion—notifying properly through the [`Sender`].
+
+Of course, this example will download files sequentially; but, since [`run`] returns a simple
+[`Future`], a proper collection like [`FuturesOrdered`] could be used just as easily—if not
+more! Take a look:
+
+```rust
+use futures::stream::FuturesOrdered;
+
+fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+    sipper(move |progress| async move {
+        let downloads =
+            FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
+                download(url)
+                    .map(move |progress| (id, progress))
+                    .run(&progress)
+            }));
+
+        downloads.collect().await
+    })
+}
+```
+
 [`Sipper`]: https://docs.rs/sipper/latest/sipper/trait.Sipper.html
+[`Straw`]: https://docs.rs/sipper/latest/sipper/trait.Straw.html
+[`Sender`]: https://docs.rs/sipper/latest/sipper/struct.Sender.html
 [`Future`]: https://docs.rs/futures/0.3.31/futures/future/trait.Future.html
 [`Sink`]: https://docs.rs/futures/0.3.31/futures/sink/trait.Sink.html
 [`Stream`]: https://docs.rs/futures/0.3.31/futures/stream/trait.Stream.html
+[`FuturesOrdered`]: https://docs.rs/futures/0.3.31/futures/stream/struct.FuturesOrdered.html
+[`sipper`]: https://docs.rs/sipper/latest/sipper/fn.sipper.html
+[`map`]: https://docs.rs/sipper/latest/sipper/trait.Sipper.html#method.map
+[`filter_map`]: https://docs.rs/sipper/latest/sipper/trait.Sipper.html#method.filter_map
+[`run`]: https://docs.rs/sipper/latest/sipper/trait.Sipper.html#method.run
