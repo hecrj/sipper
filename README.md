@@ -69,6 +69,10 @@ async fn example() {
 }
 ```
 
+While we could rewrite the previous snippet using `loop`, `expect`, and `break` to get the
+final file out of the [`Stream`]. We would still be introducing runtime errors and, simply put,
+working around the fact that a [`Stream`] does not encode the idea of a final value.
+
 ## The Chad Sipper
 A [`Sipper`] can precisely describe this dichotomy in a type-safe way:
 
@@ -102,7 +106,8 @@ async fn example() -> File {
 ```
 
 ## The Delicate Straw
-A [`Straw`] is a [`Sipper`] that can fail:
+How about error handling? Fear not! A [`Straw`] is a [`Sipper`] that can fail. What would
+our download example look like with an error sprinkled in?
 
 ```rust
 enum Error {
@@ -129,15 +134,13 @@ async fn example() -> Result<File, Error> {
 
 Pretty much the same! It's quite easy to add error handling to an existing [`Sipper`].
 In fact, [`Straw`] is actually just an extension trait of a [`Sipper`] with a `Result` as output.
-Therefore, all the [`Sipper`] methods are available for [`Straw`] as well.
+Therefore, all the [`Sipper`] methods are available for [`Straw`] as well. It's just nicer to write!
 
 ## The Great Builder
 You can build a [`Sipper`] with the [`sipper`] function. It takes a closure that receives
 a [`Sender`]—for sending progress updates—and must return a [`Future`] producing the output.
 
 ```rust
-use sipper::{sipper, Sipper};
-
 fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
     sipper(|mut progress| async move {
         // Perform async request here...
@@ -189,7 +192,7 @@ Of course, this example will download files sequentially; but, since [`run`] ret
 more! Take a look:
 
 ```rust
-use futures::stream::FuturesOrdered;
+use futures::stream::{FuturesOrdered, StreamExt};
 
 fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
     sipper(move |progress| async move {

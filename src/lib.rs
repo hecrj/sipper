@@ -1,134 +1,280 @@
-//! Futures that notify progress.
+//! A type-safe future that can notify progress.
+//!
+//! Effectively, a [`Sipper`] combines a [`Future`] and a [`Sink`]
+//! together to represent an asynchronous task that produces some `Output`
+//! and notifies of some `Progress`, without both types being necessarily the
+//! same.
+//!
+//! [`Sipper`] should be chosen over [`Stream`] when the final value produced—the
+//! end of the task—is important and inherently different from the other values.
+//!
+//! # An example
+//! An example of this could be a file download. When downloading a file, the progress
+//! that must be notified is normally a bunch of statistics related to the download; but
+//! when the download finishes, the contents of the file need to also be provided.
+//!
+//! ## The Uncomfy Stream
+//! With a [`Stream`], you must create some kind of type that unifies both states of the
+//! download:
+//!
+//! ```rust
+//! use futures::Stream;
+//!
+//! struct File(Vec<u8>);
+//!
+//! type Progress = u32;
+//!
+//! enum Download {
+//!    Running(Progress),
+//!    Done(File)
+//! }
+//!
+//! fn download(url: &str) -> impl Stream<Item = Download> {
+//!     // ...
+//! #     futures::stream::once(async { Download::Done(File(Vec::new())) })
+//! }
+//! ```
+//!
+//! If we now wanted to notify progress and—at the same time—do something with
+//! the final `File`, we'd need to juggle with the [`Stream`]:
+//!
+//! ```rust
+//! # use futures::Stream;
+//! #
+//! # struct File(Vec<u8>);
+//! #
+//! # type Progress = u32;
+//! #
+//! # enum Download {
+//! #    Running(Progress),
+//! #    Done(File)
+//! # }
+//! #
+//! # fn download(url: &str) -> impl Stream<Item = Download> {
+//! #     // ...
+//! #     futures::stream::once(async { Download::Done(File(Vec::new())) })
+//! # }
+//! use futures::{SinkExt, StreamExt};
+//!
+//! async fn example() {
+//!    let mut file_download = download("https://iced.rs/logo.svg").boxed();
+//!
+//!    while let Some(download) = file_download.next().await {
+//!        match download {
+//!            Download::Running(progress) => {
+//!                println!("{progress}");
+//!            }
+//!            Download::Done(file) => {
+//!                // Do something with file...
+//!                // We are nested, and there are no compiler guarantees
+//!                // this will ever be reached.
+//!            }
+//!        }
+//!    }
+//! }
+//! ```
+//!
+//! While we could rewrite the previous snippet using `loop`, `expect`, and `break` to get the
+//! final file out of the [`Stream`]. We would still be introducing runtime errors and, simply put,
+//! working around the fact that a [`Stream`] does not encode the idea of a final value.
+//!
+//! ## The Chad Sipper
+//! A [`Sipper`] can precisely describe this dichotomy in a type-safe way:
+//!
+//! ```rust
+//! use sipper::Sipper;
+//!
+//! struct File(Vec<u8>);
+//!
+//! type Progress = u32;
+//!
+//! fn download(url: &str) -> impl Sipper<File, Progress> {
+//!     // ...
+//! #     sipper::sipper(|_| futures::future::ready(File(Vec::new())))
+//! }
+//! ```
+//!
+//! Which can then be easily ~~used~~ sipped in a type-safe way:
+//!
+//! ```rust
+//! # use sipper::{sipper, Sipper};
+//! #
+//! # struct File(Vec<u8>);
+//! #
+//! # type Progress = u32;
+//! #
+//! # fn download(url: &str) -> impl Sipper<File, Progress> {
+//! #     sipper(|_| futures::future::ready(File(Vec::new())))
+//! # }
+//! #
+//! async fn example() -> File {
+//!     let mut download = download("https://iced.rs/logo.svg").sip();
+//!
+//!     while let Some(progress) = download.next().await {
+//!         println!("{progress}");
+//!     }
+//!
+//!     let logo = download.finish().await;
+//!
+//!     // We are guaranteed to have a `File` here!
+//!     logo
+//! }
+//! ```
+//!
+//! ## The Delicate Straw
+//! How about error handling? Fear not! A [`Straw`] is a [`Sipper`] that can fail. What would
+//! our download example look like with an error sprinkled in?
+//!
+//! ```rust
+//! # use sipper::{sipper, Sipper};
+//! #
+//! # struct File(Vec<u8>);
+//! #
+//! # type Progress = u32;
+//! #
+//! use sipper::Straw;
+//!
+//! enum Error {
+//!     Failed,
+//! }
+//!
+//! fn try_download(url: &str) -> impl Straw<File, Progress, Error> {
+//!     // ...
+//! #     sipper(|_| futures::future::ready(Ok(File(Vec::new()))))
+//! }
+//!
+//! async fn example() -> Result<File, Error> {
+//!    let mut download = try_download("https://iced.rs/logo.svg").sip();
+//!
+//!    while let Some(progress) = download.next().await {
+//!        println!("{progress}");
+//!    }
+//!
+//!    let logo = download.finish().await?;
+//!
+//!    // We are guaranteed to have a File here!
+//!    Ok(logo)
+//! }
+//! ```
+//!
+//! Pretty much the same! It's quite easy to add error handling to an existing [`Sipper`].
+//! In fact, [`Straw`] is actually just an extension trait of a [`Sipper`] with a `Result` as output.
+//! Therefore, all the [`Sipper`] methods are available for [`Straw`] as well. It's just nicer to write!
+//!
+//! ## The Great Builder
+//! You can build a [`Sipper`] with the [`sipper`] function. It takes a closure that receives
+//! a [`Sender`]—for sending progress updates—and must return a [`Future`] producing the output.
+//!
+//! ```rust,ignore
+//! # use sipper::{sipper, Sipper};
+//! #
+//! # struct File(Vec<u8>);
+//! #
+//! # type Progress = u32;
+//! #
+//! fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
+//!     sipper(|mut progress| async move {
+//!         // Perform async request here...
+//!         let download = /* ... */;
+//!
+//!         while let Some(chunk) = download.chunk().await {
+//!             // ...
+//!             // Send updates when needed
+//!             progress.send(/* ... */).await;
+//!
+//!         }
+//!
+//!         File(/* ... */)
+//!     })
+//! }
+//! ```
+//!
+//! ## The Fancy Composition
+//! A [`Sipper`] supports a bunch of methods for easy composition; like [`map`], [`filter_map`],
+//! and [`run`].
+//!
+//! For instance, let's say we wanted to build a new function that downloads a bunch of files
+//! instead of just one:
+//!
+//! ```rust
+//! # use sipper::{sipper, Sipper};
+//! #
+//! # struct File(Vec<u8>);
+//! #
+//! # type Progress = u32;
+//! #
+//! # fn download(url: &str) -> impl Sipper<File, Progress> {
+//! #     sipper(|_| futures::future::ready(File(Vec::new())))
+//! # }
+//! #
+//! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+//!     sipper(move |progress| async move {
+//!         let mut files = Vec::new();
+//!
+//!         for (id, url) in urls.iter().enumerate() {
+//!             let file = download(url)
+//!                 .map(move |progress| (id, progress))
+//!                 .run(&progress)
+//!                 .await;
+//!
+//!             files.push(file);
+//!         }
+//!
+//!         files
+//!     })
+//! }
+//! ```
+//!
+//! As you can see, we just leverage [`map`] to introduce the download index with the progress
+//! and [`run`] to drive the [`Sipper`] to completion—notifying properly through the [`Sender`].
+//!
+//! Of course, this example will download files sequentially; but, since [`run`] returns a simple
+//! [`Future`], a proper collection like [`FuturesOrdered`] could be used just as easily—if not
+//! more! Take a look:
+//!
+//! ```rust
+//! # use sipper::{sipper, Sipper};
+//! #
+//! # struct File(Vec<u8>);
+//! #
+//! # type Progress = u32;
+//! #
+//! # fn download(url: &str) -> impl Sipper<File, Progress> {
+//! #     sipper(|_| futures::future::ready(File(Vec::new())))
+//! # }
+//! #
+//! use futures::stream::{FuturesOrdered, StreamExt};
+//!
+//! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+//!     sipper(move |progress| async move {
+//!         FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
+//!             download(url)
+//!                 .map(move |progress| (id, progress))
+//!                 .run(&progress)
+//!         }))
+//!         .collect()
+//!         .await
+//!     })
+//! }
+//! ```
+//!
+//! [`Sink`]: futures::Sink
+//! [`FuturesOrdered`]: futures::stream::FuturesOrdered
+//! [`map`]: Sipper::map
+//! [`filter_map`]: Sipper::filter_map
+//! [`run`]: Sipper::run
 use futures::channel::mpsc;
 use futures::future::{BoxFuture, Either};
 use futures::stream;
 
 use std::marker::PhantomData;
 
+#[doc(no_inline)]
 pub use futures::never::Never;
+#[doc(no_inline)]
 pub use futures::{Future, FutureExt, Stream, StreamExt};
 
 /// A sipper is a [`Future`] that can notify progress.
-///
-/// Effectively, a [`Sipper`] combines a [`Future`] and a [`Sink`]
-/// together to represent an asynchronous task that produces some `Output`
-/// and notifies of some `Progress`, without both types being necessarily the
-/// same.
-///
-/// [`Sipper`] should be chosen over [`Stream`] when the final value produced—the
-/// end of the task—is important and inherently different from the other values.
-///
-/// # An example
-/// An example of this could be a file download. When downloading a file, the progress
-/// that must be notified is normally a bunch of statistics related to the download; but
-/// when the download finishes, the contents of the file need to also be provided.
-///
-/// ## The Uncomfy Stream
-/// With a [`Stream`], you must create some kind of type that unifies both states of the
-/// download:
-///
-/// ```rust
-/// use futures::Stream;
-///
-/// struct File(Vec<u8>);
-///
-/// struct Progress(u32);
-///
-/// enum Download {
-///    Running(Progress),
-///    Done(File)
-/// }
-///
-/// fn download(url: &str) -> impl Stream<Item = Download> {
-///     // ...
-/// #     futures::stream::once(async { Download::Done(File(Vec::new())) })
-/// }
-/// ```
-///
-/// If we now wanted to notify progress and—at the same time—do something with
-/// the final `File`, we'd need to juggle with the [`Stream`]:
-///
-/// ```rust
-/// # use futures::Stream;
-/// #
-/// # struct File(Vec<u8>);
-/// #
-/// # enum Download {
-/// #    Running(u32),
-/// #    Done(File)
-/// # }
-/// #
-/// # fn download(url: &str) -> impl Stream<Item = Download> {
-/// #     // ...
-/// #     futures::stream::once(async { Download::Done(File(Vec::new())) })
-/// # }
-/// use futures::{SinkExt, StreamExt};
-///
-/// async fn example() {
-///    let mut file_download = download("https://iced.rs/logo.svg").boxed();
-///
-///    while let Some(download) = file_download.next().await {
-///        match download {
-///            Download::Running(progress) => {
-///                println!("{progress}");
-///            }
-///            Download::Done(file) => {
-///                // Do something with file...
-///                // We are nested, and there are no compiler guarantees
-///                // this will ever be reached.
-///            }
-///        }
-///    }
-/// }
-/// ```
-///
-/// While we could rewrite the previous snippet using `loop`, `expect`, and `break` to get the
-/// final file out of the [`Stream`]. We would still be introducing runtime errors and, simply put,
-/// working around the fact that a [`Stream`] does not encode the idea of a final value.
-///
-/// ## The Chad Sipper
-/// A [`Sipper`] can precisely describe this dichotomy in a type-safe way:
-///
-/// ```rust
-/// use sipper::Sipper;
-///
-/// struct File(Vec<u8>);
-///
-/// struct Progress(u32);
-///
-/// fn download(url: &str) -> impl Sipper<File, Progress> {
-///     // ...
-/// #     sipper::sipper(|_| futures::future::ready(File(Vec::new())))
-/// }
-/// ```
-///
-/// Which can then be easily used in a type-safe way:
-///
-/// ```rust
-/// # use sipper::{sipper, Sipper};
-/// #
-/// # struct File(Vec<u8>);
-/// #
-/// # fn download(url: &str) -> impl Sipper<File, u32> {
-/// #     sipper(|_| futures::future::ready(File(Vec::new())))
-/// # }
-/// #
-/// async fn example() -> File {
-///     let mut download = download("https://iced.rs/logo.svg").sip();
-///
-///     while let Some(progress) = download.next().await {
-///         println!("{progress}");
-///     }
-///
-///     let logo = download.finish().await;
-///
-///     // We are guaranteed to have a `File` here!
-///     logo
-/// }
-/// ```
-///
-/// [`Stream`]: futures::Stream
-/// [`Sink`]: futures::Sink
 pub trait Sipper<Output, Progress = Output>: Sized {
     /// The future returned by this [`Sipper`].
     type Future: Future<Output = Output> + Send;
@@ -420,21 +566,6 @@ impl<T> Clone for Sender<T> {
     }
 }
 
-/// A trait that can only be implemented by types with no values, like
-/// [`Never`].
-///
-/// It is a useful trait to coerce error generics in a type safe way.
-pub trait NeverError {
-    /// A method that can never be called!
-    fn never<T>(self) -> T;
-}
-
-impl NeverError for Never {
-    fn never<T>(self) -> T {
-        match self {}
-    }
-}
-
 /// Creates a new [`Sipper`] from the given async closure, which receives
 /// a [`Sender`] that can be used to notify progress asynchronously.
 pub fn sipper<Progress, F>(
@@ -470,9 +601,9 @@ where
     }
 }
 
-/// Turns the [`Sipper`] into a [`Stream`].
+/// Turns a [`Sipper`] into a [`Stream`].
 ///
-/// This is only possible if the `Output` and `Progress` types match!
+/// This is only possible if the `Output` and `Progress` types of the [`Sipper`] match!
 pub fn stream<Output>(sipper: impl Sipper<Output>) -> impl Stream<Item = Output> + Send
 where
     Output: Send,

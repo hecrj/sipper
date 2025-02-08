@@ -3,7 +3,7 @@ name = "sipper"
 version = "0.0.2"
 edition = "2021"
 license = "MIT"
-description = "A future that can notify progress"
+description = "A type-safe future that can notify progress"
 repository = "https://github.com/hecrj/sipper"
 
 [dependencies]
