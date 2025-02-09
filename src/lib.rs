@@ -225,7 +225,7 @@
 //! }
 //! ```
 //!
-//! As you can see, we just leverage [`map`] to introduce the download index with the progress
+//! As you can see, we just leverage [`map`] to combine the download index with the progress
 //! and [`run`] to drive the [`Sipper`] to completion—notifying properly through the [`Sender`].
 //!
 //! Of course, this example will download files sequentially; but, since [`run`] returns a simple
