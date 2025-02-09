@@ -94,7 +94,7 @@
 //! }
 //! ```
 //!
-//! Which can then be easily ~~used~~ sipped in a type-safe way:
+//! Which can then be easily ~~used~~ sipped:
 //!
 //! ```rust
 //! # use sipper::{sipper, Sipper};

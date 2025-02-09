@@ -88,7 +88,7 @@ fn download(url: &str) -> impl Sipper<File, Progress> {
 }
 ```
 
-Which can then be easily ~~used~~ sipped in a type-safe way:
+Which can then be easily ~~used~~ sipped:
 
 ```rust
 async fn example() -> File {
