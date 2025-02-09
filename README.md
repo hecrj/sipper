@@ -8,7 +8,7 @@
 [![Downloads](https://img.shields.io/crates/d/sipper.svg)](https://crates.io/crates/sipper)
 [![Test Status](https://img.shields.io/github/actions/workflow/status/hecrj/sipper/test.yml?branch=master&event=push&label=test)](https://github.com/hecrj/sipper/actions)
 
-A sipper is a [`Future`] that can notify progress.
+A sipper is a type-safe [`Future`] that can notify progress.
 </div>
 
 Effectively, a [`Sipper`] combines a [`Future`] and a [`Sink`]
@@ -57,7 +57,7 @@ async fn example() {
    while let Some(download) = file_download.next().await {
        match download {
            Download::Running(progress) => {
-               println!("{progress}");
+               println!("{progress}%");
            }
            Download::Done(file) => {
                // Do something with file...
@@ -70,7 +70,7 @@ async fn example() {
 ```
 
 While we could rewrite the previous snippet using `loop`, `expect`, and `break` to get the
-final file out of the [`Stream`]. We would still be introducing runtime errors and, simply put,
+final file out of the [`Stream`], we would still be introducing runtime errors and, simply put,
 working around the fact that a [`Stream`] does not encode the idea of a final value.
 
 ## The Chad Sipper
@@ -95,7 +95,7 @@ async fn example() -> File {
    let mut download = download("https://iced.rs/logo.svg").sip();
 
    while let Some(progress) = download.next().await {
-       println!("{progress}");
+       println!("{progress}%");
    }
 
    let logo = download.finish().await;
@@ -122,7 +122,7 @@ async fn example() -> Result<File, Error> {
    let mut download = try_download("https://iced.rs/logo.svg").sip();
 
    while let Some(progress) = download.next().await {
-       println!("{progress}");
+       println!("{progress}%");
    }
 
    let logo = download.finish().await?;

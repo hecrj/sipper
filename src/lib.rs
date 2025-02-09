@@ -1,4 +1,4 @@
-//! A type-safe future that can notify progress.
+//! A [`Sipper`] is a type-safe [`Future`] that can notify progress.
 //!
 //! Effectively, a [`Sipper`] combines a [`Future`] and a [`Sink`]
 //! together to represent an asynchronous task that produces some `Output`
@@ -62,7 +62,7 @@
 //!    while let Some(download) = file_download.next().await {
 //!        match download {
 //!            Download::Running(progress) => {
-//!                println!("{progress}");
+//!                println!("{progress}%");
 //!            }
 //!            Download::Done(file) => {
 //!                // Do something with file...
@@ -75,7 +75,7 @@
 //! ```
 //!
 //! While we could rewrite the previous snippet using `loop`, `expect`, and `break` to get the
-//! final file out of the [`Stream`]. We would still be introducing runtime errors and, simply put,
+//! final file out of the [`Stream`], we would still be introducing runtime errors and, simply put,
 //! working around the fact that a [`Stream`] does not encode the idea of a final value.
 //!
 //! ## The Chad Sipper
@@ -111,7 +111,7 @@
 //!     let mut download = download("https://iced.rs/logo.svg").sip();
 //!
 //!     while let Some(progress) = download.next().await {
-//!         println!("{progress}");
+//!         println!("{progress}%");
 //!     }
 //!
 //!     let logo = download.finish().await;
@@ -147,7 +147,7 @@
 //!    let mut download = try_download("https://iced.rs/logo.svg").sip();
 //!
 //!    while let Some(progress) = download.next().await {
-//!        println!("{progress}");
+//!        println!("{progress}%");
 //!    }
 //!
 //!    let logo = download.finish().await?;
