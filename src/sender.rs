@@ -6,6 +6,8 @@ use futures::sink;
 use std::marker::PhantomData;
 
 /// A sender used to notify the progress of some [`Sipper`].
+///
+/// [`Sipper`]: crate::Sipper
 #[derive(Debug)]
 pub struct Sender<T, S = mpsc::Sender<T>> {
     pub(crate) sink: S,

@@ -1,11 +1,14 @@
-//! A [`Sipper`] is a type-safe [`Future`] that can notify progress.
+//! A sipper is a type-safe [`Future`] that can [`Stream`] progress.
 //!
-//! Effectively, a [`Sipper`] combines a [`Future`] and a [`Sink`]
+//! Effectively, a [`Sipper`] combines a [`Future`] and a [`Stream`]
 //! together to represent an asynchronous task that produces some `Output`
 //! and notifies of some `Progress`, without both types being necessarily the
 //! same.
 //!
-//! [`Sipper`] should be chosen over [`Stream`] when the final value produced—the
+//! In fact, a [`Sipper`] implements both the [`Future`] and the [`Stream`] traits—
+//! which gives you all the great combinators from [`FutureExt`] and [`StreamExt`] for free.
+//!
+//! Generally, [`Sipper`] should be chosen over [`Stream`] when the final value produced—the
 //! end of the task—is important and inherently different from the other values.
 //!
 //! # An example
@@ -25,8 +28,8 @@
 //! type Progress = u32;
 //!
 //! enum Download {
-//!    Running(Progress),
-//!    Done(File)
+//!     Running(Progress),
+//!     Done(File)
 //! }
 //!
 //! fn download(url: &str) -> impl Stream<Item = Download> {
@@ -57,20 +60,20 @@
 //! use futures::{SinkExt, StreamExt};
 //!
 //! async fn example() {
-//!    let mut file_download = download("https://iced.rs/logo.svg").boxed();
+//!     let mut file_download = download("https://iced.rs/logo.svg").boxed();
 //!
-//!    while let Some(download) = file_download.next().await {
-//!        match download {
-//!            Download::Running(progress) => {
-//!                println!("{progress}%");
-//!            }
-//!            Download::Done(file) => {
-//!                // Do something with file...
-//!                // We are nested, and there are no compiler guarantees
-//!                // this will ever be reached.
-//!            }
-//!        }
-//!    }
+//!     while let Some(download) = file_download.next().await {
+//!         match download {
+//!             Download::Running(progress) => {
+//!                 println!("{progress}%");
+//!             }
+//!             Download::Done(file) => {
+//!                 // Do something with file...
+//!                 // We are nested, and there are no compiler guarantees
+//!                 // this will ever be reached.
+//!             }
+//!         }
+//!     }
 //! }
 //! ```
 //!
@@ -110,13 +113,16 @@
 //! async fn example() -> File {
 //!     let mut download = download("https://iced.rs/logo.svg").pin();
 //!
+//!     // A sipper is a stream!
+//!     // `Sipper::sip` is actually just an alias of `Stream::next`
 //!     while let Some(progress) = download.sip().await {
 //!         println!("{progress}%");
 //!     }
 //!
+//!     // A sipper is also a future!
 //!     let logo = download.await;
 //!
-//!     // We are guaranteed to have a `File` here!
+//!     // We are guaranteed to have a File here!
 //!     logo
 //! }
 //! ```
@@ -144,16 +150,16 @@
 //! }
 //!
 //! async fn example() -> Result<File, Error> {
-//!    let mut download = try_download("https://iced.rs/logo.svg").pin();
+//!     let mut download = try_download("https://iced.rs/logo.svg").pin();
 //!
-//!    while let Some(progress) = download.sip().await {
-//!        println!("{progress}%");
-//!    }
+//!     while let Some(progress) = download.sip().await {
+//!         println!("{progress}%");
+//!     }
 //!
-//!    let logo = download.await?;
+//!     let logo = download.await?;
 //!
-//!    // We are guaranteed to have a File here!
-//!    Ok(logo)
+//!     // We are guaranteed to have a File here!
+//!     Ok(logo)
 //! }
 //! ```
 //!
@@ -173,14 +179,14 @@
 //! # type Progress = u32;
 //! #
 //! fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
-//!     sipper(|mut progress| async move {
+//!     sipper(|mut sender| async move {
 //!         // Perform async request here...
 //!         let download = /* ... */;
 //!
 //!         while let Some(chunk) = download.chunk().await {
 //!             // ...
 //!             // Send updates when needed
-//!             progress.send(/* ... */).await;
+//!             sender.send(/* ... */).await;
 //!
 //!         }
 //!
@@ -208,13 +214,13 @@
 //! # }
 //! #
 //! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-//!     sipper(move |progress| async move {
+//!     sipper(move |sender| async move {
 //!         let mut files = Vec::new();
 //!
 //!         for (id, url) in urls.iter().enumerate() {
 //!             let file = download(url)
 //!                 .with(move |progress| (id, progress))
-//!                 .run(&progress)
+//!                 .run(&sender)
 //!                 .await;
 //!
 //!             files.push(file);
@@ -226,7 +232,7 @@
 //! ```
 //!
 //! As you can see, we just leverage [`with`] to combine the download index with the progress
-//! and [`run`] to drive the [`Sipper`] to completion—notifying properly through the [`Sender`].
+//! and call [`run`] to drive the [`Sipper`] to completion—notifying properly through the [`Sender`].
 //!
 //! Of course, this example will download files sequentially; but, since [`run`] returns a simple
 //! [`Future`], a proper collection like [`FuturesOrdered`] could be used just as easily—if not
@@ -246,11 +252,11 @@
 //! use futures::stream::{FuturesOrdered, StreamExt};
 //!
 //! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-//!     sipper(move |progress| async move {
+//!     sipper(move |sender| async move {
 //!         FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
 //!             download(url)
 //!                 .with(move |progress| (id, progress))
-//!                 .run(&progress)
+//!                 .run(&sender)
 //!         }))
 //!         .collect()
 //!         .await
@@ -258,7 +264,10 @@
 //! }
 //! ```
 //!
+//! [`Stream`]: futures::Stream
 //! [`Sink`]: futures::Sink
+//! [`FutureExt`]: futures::FutureExt
+//! [`StreamExt`]: futures::StreamExt
 //! [`FuturesOrdered`]: futures::stream::FuturesOrdered
 //! [`with`]: Sipper::with
 //! [`filter_with`]: Sipper::filter_with
@@ -341,7 +350,7 @@ pub trait Sipper<Output, Progress = Output>:
 
     /// Pins the [`Sipper`] in a [`Box`].
     ///
-    /// You may need to call this method before being able to [`sip`].
+    /// You may need to call this method before being able to [`sip`](Self::sip).
     fn pin(self) -> Pin<Box<Self>>
     where
         Self: Sized,
@@ -609,14 +618,17 @@ mod tests {
         use futures::stream::{FuturesOrdered, StreamExt};
 
         fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-            sipper(move |progress| async move {
-                FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
-                    download(url)
-                        .with(move |progress| (id, progress))
-                        .run(&progress)
-                }))
-                .collect()
-                .await
+            sipper(move |sender| async move {
+                urls.iter()
+                    .enumerate()
+                    .map(|(id, url)| {
+                        download(url)
+                            .with(move |progress| (id, progress))
+                            .run(&sender)
+                    })
+                    .collect::<FuturesOrdered<_>>()
+                    .collect()
+                    .await
             })
         }
 
