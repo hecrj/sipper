@@ -108,13 +108,13 @@
 //! # }
 //! #
 //! async fn example() -> File {
-//!     let mut download = download("https://iced.rs/logo.svg").sip();
+//!     let mut download = download("https://iced.rs/logo.svg").pin();
 //!
-//!     while let Some(progress) = download.next().await {
+//!     while let Some(progress) = download.sip().await {
 //!         println!("{progress}%");
 //!     }
 //!
-//!     let logo = download.finish().await;
+//!     let logo = download.await;
 //!
 //!     // We are guaranteed to have a `File` here!
 //!     logo
@@ -144,13 +144,13 @@
 //! }
 //!
 //! async fn example() -> Result<File, Error> {
-//!    let mut download = try_download("https://iced.rs/logo.svg").sip();
+//!    let mut download = try_download("https://iced.rs/logo.svg").pin();
 //!
-//!    while let Some(progress) = download.next().await {
+//!    while let Some(progress) = download.sip().await {
 //!        println!("{progress}%");
 //!    }
 //!
-//!    let logo = download.finish().await?;
+//!    let logo = download.await?;
 //!
 //!    // We are guaranteed to have a File here!
 //!    Ok(logo)
@@ -190,7 +190,7 @@
 //! ```
 //!
 //! ## The Fancy Composition
-//! A [`Sipper`] supports a bunch of methods for easy composition; like [`map`], [`filter_map`],
+//! A [`Sipper`] supports a bunch of methods for easy composition; like [`with`], [`filter_with`],
 //! and [`run`].
 //!
 //! For instance, let's say we wanted to build a new function that downloads a bunch of files
@@ -213,7 +213,7 @@
 //!
 //!         for (id, url) in urls.iter().enumerate() {
 //!             let file = download(url)
-//!                 .map(move |progress| (id, progress))
+//!                 .with(move |progress| (id, progress))
 //!                 .run(&progress)
 //!                 .await;
 //!
@@ -225,7 +225,7 @@
 //! }
 //! ```
 //!
-//! As you can see, we just leverage [`map`] to combine the download index with the progress
+//! As you can see, we just leverage [`with`] to combine the download index with the progress
 //! and [`run`] to drive the [`Sipper`] to completion—notifying properly through the [`Sender`].
 //!
 //! Of course, this example will download files sequentially; but, since [`run`] returns a simple
@@ -249,7 +249,7 @@
 //!     sipper(move |progress| async move {
 //!         FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
 //!             download(url)
-//!                 .map(move |progress| (id, progress))
+//!                 .with(move |progress| (id, progress))
 //!                 .run(&progress)
 //!         }))
 //!         .collect()
@@ -260,366 +260,202 @@
 //!
 //! [`Sink`]: futures::Sink
 //! [`FuturesOrdered`]: futures::stream::FuturesOrdered
-//! [`map`]: Sipper::map
-//! [`filter_map`]: Sipper::filter_map
+//! [`with`]: Sipper::with
+//! [`filter_with`]: Sipper::filter_with
 //! [`run`]: Sipper::run
-use futures::channel::mpsc;
-use futures::future::{self, BoxFuture, Either};
-use futures::stream;
+mod filter_with;
+mod run;
+mod sender;
+mod straw;
+mod with;
 
-use std::marker::PhantomData;
+pub use filter_with::FilterWith;
+pub use run::Run;
+pub use sender::Sender;
+pub use straw::Straw;
+pub use with::With;
+
+use futures::channel::mpsc;
+use futures::stream;
+use pin_project_lite::pin_project;
+
+use std::pin::Pin;
+use std::task;
 
 #[doc(no_inline)]
 pub use futures::never::Never;
 #[doc(no_inline)]
-pub use futures::{Future, FutureExt, Stream, StreamExt};
+pub use futures::{Future, FutureExt, Sink, Stream, StreamExt};
 
 /// A sipper is a [`Future`] that can notify progress.
-pub trait Sipper<Output, Progress = Output>: Sized {
-    /// The future returned by this [`Sipper`].
-    type Future: Future<Output = Output> + Send;
-
-    /// Returns a [`Future`] that runs the [`Sipper`], sending any progress through the given [`Sender`].
-    fn to_future(self, on_progress: Sender<Progress>) -> Self::Future;
-
-    /// Returns a [`Future`] that runs the [`Sipper`], sending any progress through the given [`Sender`].
+pub trait Sipper<Output, Progress = Output>:
+    Future<Output = Output> + Stream<Item = Progress>
+{
+    /// Maps the progress of the [`Sipper`] with the given closure.
     ///
-    /// This is a generic version of [`to_future`], for convenience.
-    ///
-    /// [`to_future`]: Self::to_future
-    fn run(self, on_progress: impl Into<Sender<Progress>>) -> impl Future<Output = Output> + Send {
-        self.to_future(on_progress.into())
-    }
-
-    /// Returns a [`Sip`] that can be used to run the [`Sipper`] one step at a time.
-    ///
-    /// This is specially useful if you want to write a custom loop for handling the
-    /// progress of the [`Sipper`]; while still being able to obtain the final value
-    /// with compiler guarantees.
-    fn sip<'a>(self) -> Sip<'a, Output, Progress>
-    where
-        Self::Future: 'a,
-        Output: 'a,
-        Progress: Send + 'a,
-    {
-        let (sender, receiver) = Sender::channel(1);
-        let worker = self.to_future(sender);
-
-        let stream = stream::select(
-            receiver.map(Either::Right),
-            stream::once(worker).map(Either::Left),
-        );
-
-        Sip {
-            stream: stream.boxed(),
-            output: None,
-            _progress: PhantomData,
-        }
-    }
-
-    /// Transforms the progress of a [`Sipper`] with the given function; returning a new [`Sipper`].
-    fn map<'a, T>(
-        self,
-        f: impl FnMut(Progress) -> T + Send + 'static,
-    ) -> impl Sipper<Output, T, Future = BoxFuture<'a, Output>>
+    /// This is analogous to `map` in many other types; but we use `with`
+    /// to avoid naming collisions with [`Future`] and [`Stream`].
+    fn with<F, A>(self, f: F) -> With<Self, Output, Progress, A, F>
     where
         Self: Sized,
-        Self::Future: 'a,
-        Progress: Send + 'a,
-        T: Send + 'a,
-        Output: Send + 'a,
+        F: FnMut(Progress) -> A,
     {
-        struct Map<'a, Progress, S, O, F, T>
-        where
-            S: Sipper<O, Progress>,
-            F: FnMut(Progress) -> T + Send,
-        {
-            sipper: S,
-            mapper: F,
-            _types: PhantomData<(&'a Progress, O, T)>,
-        }
-
-        impl<'a, Progress, S, O, F, T> Sipper<O, T> for Map<'a, Progress, S, O, F, T>
-        where
-            S: Sipper<O, Progress>,
-            S::Future: 'a,
-            F: FnMut(Progress) -> T + Send + 'a,
-            Progress: Send + 'a,
-            T: Send + 'a,
-            O: Send + 'a,
-        {
-            type Future = BoxFuture<'a, O>;
-
-            fn to_future(mut self, mut on_progress: Sender<T>) -> Self::Future {
-                let mut sip = self.sipper.sip();
-
-                async move {
-                    while let Some(progress) = sip.next().await {
-                        on_progress.send((self.mapper)(progress)).await;
-                    }
-
-                    sip.finish().await
-                }
-                .boxed()
-            }
-        }
-
-        Map {
-            sipper: self,
-            mapper: f,
-            _types: PhantomData,
-        }
+        With::new(self, f)
     }
 
-    /// Transforms the progress of a [`Sipper`] with the given function; returning a new [`Sipper`].
+    /// Maps and filters the progress of the [`Sipper`] with the given closure.
     ///
-    /// `None` values will be discarded and not notified.
-    fn filter_map<'a, T>(
-        self,
-        f: impl FnMut(Progress) -> Option<T> + Send + 'static,
-    ) -> impl Sipper<Output, T, Future = BoxFuture<'a, Output>>
+    /// This is analogous to `filter_map` in many other types; but we use `filter_with`
+    /// to avoid naming collisions with [`Future`] and [`Stream`].
+    fn filter_with<F, A>(self, f: F) -> FilterWith<Self, Output, Progress, A, F>
     where
         Self: Sized,
-        Self::Future: 'a,
-        Progress: Send + 'a,
-        T: Send + 'a,
-        Output: Send + 'a,
+        F: FnMut(Progress) -> Option<A>,
     {
-        struct FilterMap<'a, Progress, S, O, F, T>
-        where
-            S: Sipper<O, Progress>,
-            F: FnMut(Progress) -> Option<T> + Send,
-        {
-            sipper: S,
-            mapper: F,
-            _types: PhantomData<(&'a Progress, O, T)>,
-        }
+        FilterWith::new(self, f)
+    }
 
-        impl<'a, Progress, S, O, F, T> Sipper<O, T> for FilterMap<'a, Progress, S, O, F, T>
-        where
-            S: Sipper<O, Progress>,
-            S::Future: 'a,
-            F: FnMut(Progress) -> Option<T> + Send + 'a,
-            Progress: Send + 'a,
-            T: Send + 'a,
-            O: Send + 'a,
-        {
-            type Future = BoxFuture<'a, O>;
+    /// Returns the next progress, if any.
+    ///
+    /// When this method returns `None`, it means there is no more progress to be made;
+    /// and the output is ready.
+    fn sip(&mut self) -> stream::Next<'_, Self>
+    where
+        Self: Unpin,
+    {
+        StreamExt::next(self)
+    }
 
-            fn to_future(mut self, mut on_progress: Sender<T>) -> Self::Future {
-                let mut sip = self.sipper.sip();
+    /// Runs the [`Sipper`], sending any progress through the given [`Sender`] and returning
+    /// its output at the end.
+    fn run<S>(self, on_progress: impl Into<Sender<Progress, S>>) -> Run<Self, S, Output, Progress>
+    where
+        Self: Sized,
+        S: Sink<Progress>,
+    {
+        Run::new(self, on_progress.into().sink)
+    }
 
-                async move {
-                    while let Some(progress) = sip.next().await {
-                        if let Some(progress) = (self.mapper)(progress) {
-                            on_progress.send(progress).await;
-                        }
-                    }
-
-                    sip.finish().await
-                }
-                .boxed()
-            }
-        }
-
-        FilterMap {
-            sipper: self,
-            mapper: f,
-            _types: PhantomData,
-        }
+    /// Pins the [`Sipper`] in a [`Box`].
+    ///
+    /// You may need to call this method before being able to [`sip`].
+    fn pin(self) -> Pin<Box<Self>>
+    where
+        Self: Sized,
+    {
+        Box::pin(self)
     }
 }
 
-/// A [`Straw`] is a [`Sipper`] that can fail.
-///
-/// This is an extension trait of [`Sipper`], for convenience.
-pub trait Straw<Output, Progress = Output, Error = Never>:
-    Sipper<Result<Output, Error>, Progress>
+impl<T, Output, Progress> Sipper<Output, Progress> for T where
+    T: Future<Output = Output> + Stream<Item = Progress>
 {
-}
-
-impl<S, Output, Progress, Error> Straw<Output, Progress, Error> for S where
-    S: Sipper<Result<Output, Error>, Progress>
-{
-}
-
-/// A [`Sip`] lets you run a [`Sipper`] one step at a time.
-///
-/// Every [`next`] call produces some progress; while [`finish`]
-/// can be called at any time to directly obtain the final output,
-/// discarding any further progress notifications.
-///
-/// [`next`]: Self::next
-/// [`finish`]: Self::finish
-#[allow(missing_debug_implementations)]
-pub struct Sip<'a, Output, Progress = Output> {
-    stream: stream::BoxStream<'a, Either<Output, Progress>>,
-    output: Option<Output>,
-    _progress: PhantomData<Progress>,
-}
-
-impl<Output, Progress> Sip<'_, Output, Progress> {
-    /// Gets the next progress, if any.
-    ///
-    /// When this method returns `None`, it means there
-    /// is no more progress to be made; and the output is
-    /// ready.
-    pub async fn next(&mut self) -> Option<Progress> {
-        if self.output.is_some() {
-            return None;
-        }
-
-        while let Some(item) = self.stream.next().await {
-            match item {
-                Either::Left(output) => {
-                    self.output = Some(output);
-                }
-                Either::Right(progress) => return Some(progress),
-            }
-        }
-
-        None
-    }
-
-    /// Discards any further progress not obtained yet with [`next`] and
-    /// obtains the final output.
-    ///
-    /// [`next`]: Self::next
-    pub async fn finish(mut self) -> Output {
-        if let Some(output) = self.output {
-            return output;
-        }
-
-        // Discard all progress left
-        while self.next().await.is_some() {}
-
-        // We are guaranteed to have an output
-        self.output.expect("A sipper must produce output!")
-    }
-}
-
-/// A sender used to notify the progress of some [`Sipper`].
-#[derive(Debug)]
-pub struct Sender<T>(Sender_<T>);
-
-#[derive(Debug)]
-enum Sender_<T> {
-    Null,
-    Mpsc(mpsc::Sender<T>),
-}
-
-impl<T> Sender<T> {
-    /// Creates a new [`Sender`] from an [`mpsc::Sender`].
-    pub fn new(sender: mpsc::Sender<T>) -> Self {
-        Self(Sender_::Mpsc(sender))
-    }
-
-    /// Creates a new channel with the given buffer capacity.
-    pub fn channel(buffer: usize) -> (Self, mpsc::Receiver<T>) {
-        let (sender, receiver) = mpsc::channel(buffer);
-
-        (Self(Sender_::Mpsc(sender)), receiver)
-    }
-
-    /// Creates a new [`Sender`] that discards any progress.
-    pub fn null() -> Self {
-        Self(Sender_::Null)
-    }
-
-    /// Sends a value through the [`Sender`].
-    ///
-    /// Since we are only notifying progress, any channel errors
-    /// are discarded.
-    pub async fn send(&mut self, value: T) {
-        use futures::SinkExt;
-
-        if let Self(Sender_::Mpsc(raw)) = self {
-            let _ = raw.send(value).await;
-        }
-    }
-}
-
-impl<T> From<mpsc::Sender<T>> for Sender<T> {
-    fn from(sender: mpsc::Sender<T>) -> Self {
-        Self(Sender_::Mpsc(sender))
-    }
-}
-
-impl<T> From<&Sender<T>> for Sender<T> {
-    fn from(sender: &Sender<T>) -> Self {
-        sender.clone()
-    }
-}
-
-impl<T> From<&mut Sender<T>> for Sender<T> {
-    fn from(sender: &mut Sender<T>) -> Self {
-        sender.clone()
-    }
-}
-
-impl<T> Clone for Sender<T> {
-    fn clone(&self) -> Self {
-        Self(match &self.0 {
-            Sender_::Null => Sender_::Null,
-            Sender_::Mpsc(sender) => Sender_::Mpsc(sender.clone()),
-        })
-    }
 }
 
 /// Creates a new [`Sipper`] from the given async closure, which receives
 /// a [`Sender`] that can be used to notify progress asynchronously.
 pub fn sipper<Progress, F>(
     builder: impl FnOnce(Sender<Progress>) -> F,
-) -> impl Sipper<F::Output, Progress, Future = F>
+) -> impl Sipper<F::Output, Progress>
 where
-    F: Future + Send,
+    F: Future,
 {
-    struct Internal<Progress, F, B>
-    where
-        F: Future,
-        B: FnOnce(Sender<Progress>) -> F,
-    {
-        builder: B,
-        _types: PhantomData<(Progress, F)>,
-    }
-
-    impl<Progress, F, B> Sipper<F::Output, Progress> for Internal<Progress, F, B>
-    where
-        F: Future + Send,
-        B: FnOnce(Sender<Progress>) -> F,
-    {
-        type Future = F;
-
-        fn to_future(self, on_progress: Sender<Progress>) -> Self::Future {
-            (self.builder)(on_progress)
+    pin_project! {
+        struct Internal<F, Progress>
+        where
+            F: Future,
+        {
+            #[pin]
+            future: F,
+            #[pin]
+            receiver: mpsc::Receiver<Progress>,
+            output: Option<F::Output>,
+            is_progress_finished: bool,
         }
     }
 
+    impl<F, Progress> Future for Internal<F, Progress>
+    where
+        F: Future,
+    {
+        type Output = F::Output;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+            use futures::ready;
+
+            let mut this = self.project();
+
+            if !*this.is_progress_finished {
+                loop {
+                    match this.receiver.as_mut().poll_next(cx) {
+                        task::Poll::Ready(Some(_)) => {} // Discard
+                        task::Poll::Ready(None) => {
+                            *this.is_progress_finished = true;
+                            break;
+                        }
+                        task::Poll::Pending => {
+                            *this.output = Some(ready!(this.future.poll(cx)));
+                            return task::Poll::Pending;
+                        }
+                    }
+                }
+            }
+
+            if let Some(output) = this.output.take() {
+                task::Poll::Ready(output)
+            } else {
+                this.future.poll(cx)
+            }
+        }
+    }
+
+    impl<F, Progress> Stream for Internal<F, Progress>
+    where
+        F: Future,
+    {
+        type Item = Progress;
+
+        fn poll_next(
+            self: Pin<&mut Self>,
+            cx: &mut task::Context<'_>,
+        ) -> task::Poll<Option<Self::Item>> {
+            use futures::ready;
+
+            let mut this = self.project();
+
+            match this.receiver.as_mut().poll_next(cx) {
+                task::Poll::Ready(progress) => task::Poll::Ready(progress),
+                task::Poll::Pending => {
+                    *this.output = Some(ready!(this.future.poll(cx)));
+                    task::Poll::Pending
+                }
+            }
+        }
+    }
+
+    let (sender, receiver) = Sender::channel(1);
+
     Internal {
-        builder,
-        _types: PhantomData,
+        future: builder(sender),
+        receiver,
+        is_progress_finished: false,
+        output: None,
     }
 }
 
 /// Turns a [`Sipper`] into a [`Stream`].
 ///
 /// This is only possible if the `Output` and `Progress` types of the [`Sipper`] match!
-pub fn stream<Output>(sipper: impl Sipper<Output>) -> impl Stream<Item = Output> + Send
-where
-    Output: Send,
-{
-    let (mut sender, receiver) = Sender::channel(1);
-    let run = sipper.to_future(sender.clone());
+pub fn stream<Output>(sipper: impl Sipper<Output>) -> impl Stream<Item = Output> {
+    let sip = sipper.pin();
 
-    stream::select(
-        receiver,
-        stream::once(async move {
-            let output = run.await;
-            sender.send(output).await;
-            None
-        })
-        .filter_map(future::ready),
-    )
+    stream::unfold(Some(sip), |mut sip| async move {
+        if let Some(progress) = sip.as_mut()?.next().await {
+            Some((progress, sip))
+        } else {
+            Some((sip.take()?.await, sip))
+        }
+    })
 }
 
 #[cfg(test)]
@@ -627,7 +463,6 @@ mod tests {
     use super::*;
 
     use futures::channel::mpsc;
-    use futures::StreamExt;
 
     use tokio::task;
     use tokio::test;
@@ -667,7 +502,26 @@ mod tests {
     }
 
     #[test]
+    async fn it_is_a_future() {
+        assert_eq!(
+            download("https://iced.rs/logo.svg").await,
+            File(vec![1, 2, 3, 4])
+        );
+    }
+
+    #[test]
+    async fn it_is_a_stream() {
+        assert!(download("https://iced.rs/logo.svg")
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .eq(0..=100));
+    }
+
+    #[test]
     async fn it_works() {
+        use futures::StreamExt;
+
         let (sender, receiver) = mpsc::channel(1);
 
         let progress = task::spawn(receiver.collect::<Vec<_>>());
@@ -687,14 +541,14 @@ mod tests {
         let mut i = 0;
         let mut last_progress = None;
 
-        let mut download = download("https://iced.rs/logo.svg").sip();
+        let mut download = download("https://iced.rs/logo.svg").pin();
 
-        while let Some(progress) = download.next().await {
+        while let Some(progress) = download.sip().await {
             i += 1;
             last_progress = Some(progress);
         }
 
-        let file = download.finish().await;
+        let file = download.await;
 
         assert_eq!(i, 101);
         assert_eq!(last_progress, Some(100));
@@ -703,18 +557,19 @@ mod tests {
 
     #[test]
     async fn it_sips_partially() {
-        let mut download = download("https://iced.rs/logo.svg").sip();
+        let mut download = download("https://iced.rs/logo.svg").pin();
 
         assert_eq!(download.next().await, Some(0));
         assert_eq!(download.next().await, Some(1));
         assert_eq!(download.next().await, Some(2));
         assert_eq!(download.next().await, Some(3));
-        assert_eq!(download.finish().await, File(vec![1, 2, 3, 4]));
+        assert_eq!(download.await, File(vec![1, 2, 3, 4]));
     }
 
     #[test]
     async fn it_can_be_streamed() {
         async fn uses_stream(stream: impl Stream<Item = File> + Send) {
+            use futures::StreamExt;
             let files: Vec<_> = stream.collect().await;
 
             assert_eq!(files.len(), 102);
@@ -722,7 +577,7 @@ mod tests {
         }
 
         uses_stream(stream(
-            download("https://iced.rs/logo.svg").map(|_| File(vec![])),
+            download("https://iced.rs/logo.svg").with(|_| File(vec![])),
         ))
         .await;
     }
@@ -732,14 +587,14 @@ mod tests {
         let mut i = 0;
         let mut last_progress = None;
 
-        let mut download = try_download("https://iced.rs/logo.svg").sip();
+        let mut download = try_download("https://iced.rs/logo.svg").pin();
 
         while let Some(progress) = download.next().await {
             i += 1;
             last_progress = Some(progress);
         }
 
-        let file = download.finish().await;
+        let file = download.await;
 
         assert_eq!(i, 43);
         assert_eq!(last_progress, Some(42));
@@ -748,13 +603,13 @@ mod tests {
 
     #[test]
     async fn it_composes_nicely() {
-        use futures::stream::FuturesOrdered;
+        use futures::stream::{FuturesOrdered, StreamExt};
 
         fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
             sipper(move |progress| async move {
                 FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
                     download(url)
-                        .map(move |progress| (id, progress))
+                        .with(move |progress| (id, progress))
                         .run(&progress)
                 }))
                 .collect()
@@ -763,7 +618,7 @@ mod tests {
         }
 
         let mut download =
-            download_all(&["https://iced.rs/logo.svg", "https://iced.rs/logo.white.svg"]).sip();
+            download_all(&["https://iced.rs/logo.svg", "https://iced.rs/logo.white.svg"]).pin();
 
         let mut i = 0;
 
@@ -771,7 +626,7 @@ mod tests {
             i += 1;
         }
 
-        let files = download.finish().await;
+        let files = download.await;
 
         assert_eq!(i, 202);
         assert_eq!(files, vec![File(vec![1, 2, 3, 4]), File(vec![1, 2, 3, 4])]);
