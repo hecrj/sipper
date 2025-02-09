@@ -1,8 +1,7 @@
-use crate::{Future, Sink, Sipper};
+use crate::{Core, Future, Sink};
 
 use pin_project_lite::pin_project;
 
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task;
 
@@ -11,24 +10,22 @@ pin_project! {
     /// its output at the end.
     ///
     /// The result of [`Sipper::run`].
-    pub struct Run<S, Si, Output, Progress>
+    pub struct Run<S: Core, Si>
     {
         #[pin]
         sipper: S,
         #[pin]
         on_progress: Si,
-        state: State<Progress>,
-        _types: PhantomData<(Output, Progress)>,
+        state: State<S::Progress>,
     }
 }
 
-impl<S, Si, Output, Progress> Run<S, Si, Output, Progress> {
+impl<S: Core, Si> Run<S, Si> {
     pub(crate) fn new(sipper: S, on_progress: Si) -> Self {
         Self {
             sipper,
             on_progress,
             state: State::Read,
-            _types: PhantomData,
         }
     }
 }
@@ -41,12 +38,12 @@ enum State<T> {
     Output,
 }
 
-impl<S, Si, Output, Progress> Future for Run<S, Si, Output, Progress>
+impl<S, Si> Future for Run<S, Si>
 where
-    S: Sipper<Output, Progress>,
-    Si: Sink<Progress>,
+    S: Core,
+    Si: Sink<S::Progress>,
 {
-    type Output = Output;
+    type Output = <S as Core>::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         use futures::ready;

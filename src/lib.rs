@@ -263,12 +263,14 @@
 //! [`with`]: Sipper::with
 //! [`filter_with`]: Sipper::filter_with
 //! [`run`]: Sipper::run
+mod core;
 mod filter_with;
 mod run;
 mod sender;
 mod straw;
 mod with;
 
+pub use core::Core;
 pub use filter_with::FilterWith;
 pub use run::Run;
 pub use sender::Sender;
@@ -287,15 +289,16 @@ pub use futures::never::Never;
 #[doc(no_inline)]
 pub use futures::{Future, FutureExt, Sink, Stream, StreamExt};
 
-/// A sipper is a [`Future`] that can notify progress.
+/// A sipper is both a [`Stream`] that produces a bunch of progress
+/// and a [`Future`] that produces some final output.
 pub trait Sipper<Output, Progress = Output>:
-    Future<Output = Output> + Stream<Item = Progress>
+    core::Core<Output = Output, Progress = Progress>
 {
     /// Maps the progress of the [`Sipper`] with the given closure.
     ///
     /// This is analogous to `map` in many other types; but we use `with`
     /// to avoid naming collisions with [`Future`] and [`Stream`].
-    fn with<F, A>(self, f: F) -> With<Self, Output, Progress, A, F>
+    fn with<F, A>(self, f: F) -> With<Self, F, A>
     where
         Self: Sized,
         F: FnMut(Progress) -> A,
@@ -307,7 +310,7 @@ pub trait Sipper<Output, Progress = Output>:
     ///
     /// This is analogous to `filter_map` in many other types; but we use `filter_with`
     /// to avoid naming collisions with [`Future`] and [`Stream`].
-    fn filter_with<F, A>(self, f: F) -> FilterWith<Self, Output, Progress, A, F>
+    fn filter_with<F, A>(self, f: F) -> FilterWith<Self, F, A>
     where
         Self: Sized,
         F: FnMut(Progress) -> Option<A>,
@@ -328,7 +331,7 @@ pub trait Sipper<Output, Progress = Output>:
 
     /// Runs the [`Sipper`], sending any progress through the given [`Sender`] and returning
     /// its output at the end.
-    fn run<S>(self, on_progress: impl Into<Sender<Progress, S>>) -> Run<Self, S, Output, Progress>
+    fn run<S>(self, on_progress: impl Into<Sender<Progress, S>>) -> Run<Self, S>
     where
         Self: Sized,
         S: Sink<Progress>,
@@ -348,7 +351,7 @@ pub trait Sipper<Output, Progress = Output>:
 }
 
 impl<T, Output, Progress> Sipper<Output, Progress> for T where
-    T: Future<Output = Output> + Stream<Item = Progress>
+    T: core::Core<Output = Output, Progress = Progress>
 {
 }
 

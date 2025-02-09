@@ -1,4 +1,4 @@
-use crate::{Future, Sipper, Stream};
+use crate::{Core, Future, Stream};
 
 use pin_project_lite::pin_project;
 
@@ -10,16 +10,16 @@ pin_project! {
     /// Maps the progress of a [`Sipper`].
     ///
     /// The result of [`Sipper::with`].
-    pub struct With<S, Output, Progress, A, F>
+    pub struct With<S, F, A>
     {
         #[pin]
         sipper: S,
         mapper: F,
-        _types: PhantomData<(Output, Progress, A)>,
+        _types: PhantomData<A>,
     }
 }
 
-impl<S, Output, Progress, A, F> With<S, Output, Progress, A, F> {
+impl<S, F, A> With<S, F, A> {
     pub(crate) fn new(sipper: S, mapper: F) -> Self {
         Self {
             sipper,
@@ -29,11 +29,11 @@ impl<S, Output, Progress, A, F> With<S, Output, Progress, A, F> {
     }
 }
 
-impl<S, Output, Progress, A, F> Future for With<S, Output, Progress, A, F>
+impl<S, F, A> Future for With<S, F, A>
 where
-    S: Sipper<Output, Progress>,
+    S: Core,
 {
-    type Output = Output;
+    type Output = <S as Core>::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         let this = self.project();
@@ -41,10 +41,10 @@ where
     }
 }
 
-impl<S, Output, Progress, A, F> Stream for With<S, Output, Progress, A, F>
+impl<S, F, A> Stream for With<S, F, A>
 where
-    S: Sipper<Output, Progress>,
-    F: FnMut(Progress) -> A,
+    S: Core,
+    F: FnMut(S::Progress) -> A,
 {
     type Item = A;
 
