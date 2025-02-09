@@ -5,8 +5,8 @@
 //! and notifies of some `Progress`, without both types being necessarily the
 //! same.
 //!
-//! In fact, a [`Sipper`] implements both the [`Future`] and the [`Stream`] traits—
-//! which gives you all the great combinators from [`FutureExt`] and [`StreamExt`] for free.
+//! In fact, a [`Sipper`] implements both the [`Future`] and the [`Stream`] traits—which
+//! gives you all the great combinators from [`FutureExt`] and [`StreamExt`] for free.
 //!
 //! Generally, [`Sipper`] should be chosen over [`Stream`] when the final value produced—the
 //! end of the task—is important and inherently different from the other values.
