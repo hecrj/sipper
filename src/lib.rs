@@ -280,15 +280,15 @@ pub trait Sipper<Output, Progress = Output>: Sized {
     type Future: Future<Output = Output> + Send;
 
     /// Returns a [`Future`] that runs the [`Sipper`], sending any progress through the given [`Sender`].
-    fn run_(self, on_progress: Sender<Progress>) -> Self::Future;
+    fn to_future(self, on_progress: Sender<Progress>) -> Self::Future;
 
     /// Returns a [`Future`] that runs the [`Sipper`], sending any progress through the given [`Sender`].
     ///
-    /// This is a generic version of [`run_`], for convenience.
+    /// This is a generic version of [`to_future`], for convenience.
     ///
-    /// [`run_`]: Self::run_
+    /// [`to_future`]: Self::to_future
     fn run(self, on_progress: impl Into<Sender<Progress>>) -> impl Future<Output = Output> + Send {
-        self.run_(on_progress.into())
+        self.to_future(on_progress.into())
     }
 
     /// Returns a [`Sip`] that can be used to run the [`Sipper`] one step at a time.
@@ -303,7 +303,7 @@ pub trait Sipper<Output, Progress = Output>: Sized {
         Progress: Send + 'a,
     {
         let (sender, receiver) = Sender::channel(1);
-        let worker = self.run_(sender);
+        let worker = self.to_future(sender);
 
         let stream = stream::select(
             receiver.map(Either::Right),
@@ -350,7 +350,7 @@ pub trait Sipper<Output, Progress = Output>: Sized {
         {
             type Future = BoxFuture<'a, O>;
 
-            fn run_(mut self, mut on_progress: Sender<T>) -> Self::Future {
+            fn to_future(mut self, mut on_progress: Sender<T>) -> Self::Future {
                 let mut sip = self.sipper.sip();
 
                 async move {
@@ -406,7 +406,7 @@ pub trait Sipper<Output, Progress = Output>: Sized {
         {
             type Future = BoxFuture<'a, O>;
 
-            fn run_(mut self, mut on_progress: Sender<T>) -> Self::Future {
+            fn to_future(mut self, mut on_progress: Sender<T>) -> Self::Future {
                 let mut sip = self.sipper.sip();
 
                 async move {
@@ -590,7 +590,7 @@ where
     {
         type Future = F;
 
-        fn run_(self, on_progress: Sender<Progress>) -> Self::Future {
+        fn to_future(self, on_progress: Sender<Progress>) -> Self::Future {
             (self.builder)(on_progress)
         }
     }
@@ -610,7 +610,7 @@ where
 {
     let (sender, receiver) = Sender::channel(1);
 
-    stream::select(receiver, stream::once(sipper.run_(sender)))
+    stream::select(receiver, stream::once(sipper.to_future(sender)))
 }
 
 #[cfg(test)]
