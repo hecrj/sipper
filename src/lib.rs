@@ -264,7 +264,7 @@
 //! [`filter_map`]: Sipper::filter_map
 //! [`run`]: Sipper::run
 use futures::channel::mpsc;
-use futures::future::{BoxFuture, Either};
+use futures::future::{self, BoxFuture, Either};
 use futures::stream;
 
 use std::marker::PhantomData;
@@ -608,9 +608,18 @@ pub fn stream<Output>(sipper: impl Sipper<Output>) -> impl Stream<Item = Output>
 where
     Output: Send,
 {
-    let (sender, receiver) = Sender::channel(1);
+    let (mut sender, receiver) = Sender::channel(1);
+    let run = sipper.to_future(sender.clone());
 
-    stream::select(receiver, stream::once(sipper.to_future(sender)))
+    stream::select(
+        receiver,
+        stream::once(async move {
+            let output = run.await;
+            sender.send(output).await;
+            None
+        })
+        .filter_map(future::ready),
+    )
 }
 
 #[cfg(test)]
@@ -705,13 +714,17 @@ mod tests {
 
     #[test]
     async fn it_can_be_streamed() {
-        fn uses_stream<T>(_stream: impl Stream<Item = T> + Send) {
-            // Do nothing
+        async fn uses_stream(stream: impl Stream<Item = File> + Send) {
+            let files: Vec<_> = stream.collect().await;
+
+            assert_eq!(files.len(), 102);
+            assert_eq!(files.last(), Some(&File(vec![1, 2, 3, 4])));
         }
 
         uses_stream(stream(
             download("https://iced.rs/logo.svg").map(|_| File(vec![])),
-        ));
+        ))
+        .await;
     }
 
     #[test]
