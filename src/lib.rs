@@ -598,6 +598,8 @@ mod tests {
                 let _ = download("https://iced.rs/logo.svg").run(sender).await;
 
                 tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
 
                 finished = true;
             })
