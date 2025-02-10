@@ -393,8 +393,6 @@ where
         type Output = F::Output;
 
         fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-            use futures::ready;
-
             let mut this = self.project();
 
             if !*this.is_progress_finished {
@@ -406,8 +404,7 @@ where
                             break;
                         }
                         task::Poll::Pending => {
-                            *this.output = Some(ready!(this.future.poll(cx)));
-                            return task::Poll::Pending;
+                            break;
                         }
                     }
                 }
