@@ -195,6 +195,11 @@
 //! }
 //! ```
 //!
+//! Furthermore, [`Sipper`] has no required methods and is just an extension trait of a
+//! [`Future`] and [`Stream`] combo. This means you can come up with new ways to build a
+//! [`Sipper`] by implementing the async traits on any of your types. Additionally,
+//! any foreign type that implements both is already one.
+//!
 //! ## The Fancy Composition
 //! A [`Sipper`] supports a bunch of methods for easy composition; like [`with`], [`filter_with`],
 //! and [`run`].
