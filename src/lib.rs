@@ -492,15 +492,13 @@ pub fn stream<Output>(sipper: impl Sipper<Output>) -> impl Stream<Item = Output>
 mod tests {
     use super::*;
 
-    use futures::channel::mpsc;
-
     use tokio::task;
     use tokio::test;
 
-    type Progress = u32;
-
     #[derive(Debug, PartialEq, Eq)]
     struct File(Vec<u8>);
+
+    type Progress = u32;
 
     #[derive(Debug, PartialEq, Eq)]
     enum Error {
@@ -651,6 +649,36 @@ mod tests {
         assert_eq!(i, 43);
         assert_eq!(last_progress, Some(42));
         assert_eq!(file, Err(Error::Failed));
+    }
+
+    #[test]
+    async fn it_can_be_mapped() {
+        let mapper = |progress| progress * 2;
+
+        let download = download("https://iced.rs/logo.svg")
+            .with(mapper)
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(
+            download.into_iter().sum::<u32>(),
+            (0..=100).map(mapper).sum()
+        );
+    }
+
+    #[test]
+    async fn it_can_be_filtered() {
+        let filter = |progress| (progress % 2 == 0).then_some(progress);
+
+        let download = download("https://iced.rs/logo.svg")
+            .filter_with(filter)
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(
+            download.into_iter().sum::<u32>(),
+            (0..=100).filter_map(filter).sum()
+        );
     }
 
     #[test]
