@@ -435,12 +435,26 @@ where
 
             let mut this = self.project();
 
-            match this.receiver.as_mut().poll_next(cx) {
-                task::Poll::Ready(progress) => task::Poll::Ready(progress),
-                task::Poll::Pending => {
-                    *this.output = Some(ready!(this.future.poll(cx)));
-                    task::Poll::Pending
+            if !*this.is_progress_finished {
+                match this.receiver.as_mut().poll_next(cx) {
+                    task::Poll::Ready(None) => {
+                        *this.is_progress_finished = true;
+                    }
+                    task::Poll::Ready(progress) => return task::Poll::Ready(progress),
+                    task::Poll::Pending => {}
                 }
+            }
+
+            if this.output.is_some() {
+                return task::Poll::Ready(None);
+            }
+
+            *this.output = Some(ready!(this.future.poll(cx)));
+
+            if *this.is_progress_finished {
+                task::Poll::Ready(None)
+            } else {
+                task::Poll::Pending
             }
         }
     }
@@ -576,6 +590,26 @@ mod tests {
         assert_eq!(download.next().await, Some(2));
         assert_eq!(download.next().await, Some(3));
         assert_eq!(download.await, File(vec![1, 2, 3, 4]));
+    }
+
+    #[test]
+    async fn it_sips_fully_and_completes() {
+        let mut finished = false;
+
+        {
+            let mut download = sipper(|sender| async {
+                let _ = download("https://iced.rs/logo.svg").run(sender).await;
+
+                tokio::task::yield_now().await;
+
+                finished = true;
+            })
+            .pin();
+
+            while download.next().await.is_some() {}
+        }
+
+        assert!(finished);
     }
 
     #[test]
