@@ -201,7 +201,7 @@ more! Take a look:
 use futures::stream::{FuturesOrdered, StreamExt};
 
 fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-    sipper(move |sender| async move {
+    sipper(|sender| {
         urls.iter()
             .enumerate()
             .map(|(id, url)| {
@@ -211,7 +211,6 @@ fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress
             })
             .collect::<FuturesOrdered<_>>()
             .collect()
-            .await
     })
 }
 ```

@@ -252,14 +252,16 @@
 //! use futures::stream::{FuturesOrdered, StreamExt};
 //!
 //! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-//!     sipper(move |sender| async move {
-//!         FuturesOrdered::from_iter(urls.iter().enumerate().map(|(id, url)| {
-//!             download(url)
-//!                 .with(move |progress| (id, progress))
-//!                 .run(&sender)
-//!         }))
-//!         .collect()
-//!         .await
+//!     sipper(|sender| {
+//!         urls.iter()
+//!             .enumerate()
+//!             .map(|(id, url)| {
+//!                 download(url)
+//!                     .with(move |progress| (id, progress))
+//!                     .run(&sender)
+//!             })
+//!             .collect::<FuturesOrdered<_>>()
+//!             .collect()
 //!     })
 //! }
 //! ```
@@ -651,7 +653,7 @@ mod tests {
         use futures::stream::{FuturesOrdered, StreamExt};
 
         fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-            sipper(move |sender| async move {
+            sipper(|sender| {
                 urls.iter()
                     .enumerate()
                     .map(|(id, url)| {
@@ -661,7 +663,6 @@ mod tests {
                     })
                     .collect::<FuturesOrdered<_>>()
                     .collect()
-                    .await
             })
         }
 
