@@ -373,11 +373,9 @@ impl<T, Output, Progress> Sipper<Output, Progress> for T where
 
 /// Creates a new [`Sipper`] from the given async closure, which receives
 /// a [`Sender`] that can be used to notify progress asynchronously.
-pub fn sipper<Progress, F>(
-    builder: impl FnOnce(Sender<Progress>) -> F,
-) -> impl Sipper<F::Output, Progress>
+pub fn sipper<Progress, F, T>(builder: F) -> impl Sipper<T, Progress>
 where
-    F: Future,
+    F: AsyncFnOnce(Sender<Progress>) -> T,
 {
     pin_project! {
         struct Internal<F, Progress>
@@ -507,7 +505,7 @@ mod tests {
     }
 
     fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
-        sipper(move |mut sender| async move {
+        sipper(async move |mut sender| {
             let _url = url;
 
             for i in 0..=100 {
@@ -519,7 +517,7 @@ mod tests {
     }
 
     fn try_download(url: &str) -> impl Straw<File, Progress, Error> + '_ {
-        sipper(move |mut sender| async move {
+        sipper(async move |mut sender| {
             let _url = url;
 
             for i in 0..=42 {
@@ -540,11 +538,13 @@ mod tests {
 
     #[test]
     async fn it_is_a_stream() {
-        assert!(download("https://iced.rs/logo.svg")
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .eq(0..=100));
+        assert!(
+            download("https://iced.rs/logo.svg")
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .eq(0..=100)
+        );
     }
 
     #[test]
@@ -556,11 +556,13 @@ mod tests {
         let progress = task::spawn(receiver.collect::<Vec<_>>());
         let file = download("https://iced.rs/logo.svg").run(sender).await;
 
-        assert!(progress
-            .await
-            .expect("Collect progress")
-            .into_iter()
-            .eq(0..=100));
+        assert!(
+            progress
+                .await
+                .expect("Collect progress")
+                .into_iter()
+                .eq(0..=100)
+        );
 
         assert_eq!(file, File(vec![1, 2, 3, 4]));
     }
@@ -600,7 +602,7 @@ mod tests {
         let mut finished = false;
 
         {
-            let mut download = sipper(|sender| async {
+            let mut download = sipper(async |sender| {
                 let _ = download("https://iced.rs/logo.svg").run(sender).await;
 
                 tokio::task::yield_now().await;
@@ -717,7 +719,7 @@ mod tests {
 
     #[test]
     async fn it_prioritizes_output_over_progress() {
-        let mut infinite_progress = sipper(|progress| async move {
+        let mut infinite_progress = sipper(async |progress| {
             drop(task::spawn({
                 let mut progress = progress.clone();
 
