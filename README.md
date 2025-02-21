@@ -147,8 +147,8 @@ You can build a [`Sipper`] with the [`sipper`] function. It takes a closure that
 a [`Sender`]—for sending progress updates—and must return a [`Future`] producing the output.
 
 ```rust
-fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
-    sipper(|mut sender| async move {
+fn download(url: &str) -> impl Sipper<File, Progress> {
+    sipper(async move |mut sender| {
         // Perform async request here...
         let download = /* ... */;
 
@@ -177,8 +177,8 @@ For instance, let's say we wanted to build a new function that downloads a bunch
 instead of just one:
 
 ```rust
-fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-    sipper(move |sender| async move {
+fn download_all(urls: &[&str]) -> impl Sipper<Vec<File>, (usize, Progress)> {
+    sipper(async move |sender| {
         let mut files = Vec::new();
 
         for (id, url) in urls.iter().enumerate() {
@@ -205,7 +205,7 @@ more! Take a look:
 ```rust
 use futures::stream::{FuturesOrdered, StreamExt};
 
-fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+fn download_all(urls: &[&str]) -> impl Sipper<Vec<File>, (usize, Progress)> {
     sipper(|sender| {
         urls.iter()
             .enumerate()

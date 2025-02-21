@@ -178,7 +178,7 @@
 //! #
 //! # type Progress = u32;
 //! #
-//! fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
+//! fn download(url: &str) -> impl Sipper<File, Progress> {
 //!     sipper(|mut sender| async move {
 //!         // Perform async request here...
 //!         let download = /* ... */;
@@ -218,8 +218,8 @@
 //! #     sipper(|_| futures::future::ready(File(Vec::new())))
 //! # }
 //! #
-//! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
-//!     sipper(move |sender| async move {
+//! fn download_all(urls: &[&str]) -> impl Sipper<Vec<File>, (usize, Progress)> {
+//!     sipper(async move |sender| {
 //!         let mut files = Vec::new();
 //!
 //!         for (id, url) in urls.iter().enumerate() {
@@ -256,7 +256,7 @@
 //! #
 //! use futures::stream::{FuturesOrdered, StreamExt};
 //!
-//! fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+//! fn download_all(urls: &[&str]) -> impl Sipper<Vec<File>, (usize, Progress)> {
 //!     sipper(|sender| {
 //!         urls.iter()
 //!             .enumerate()
@@ -504,7 +504,7 @@ mod tests {
         Failed,
     }
 
-    fn download(url: &str) -> impl Sipper<File, Progress> + '_ {
+    fn download(url: &str) -> impl Sipper<File, Progress> {
         sipper(async move |mut sender| {
             let _url = url;
 
@@ -516,7 +516,7 @@ mod tests {
         })
     }
 
-    fn try_download(url: &str) -> impl Straw<File, Progress, Error> + '_ {
+    fn try_download(url: &str) -> impl Straw<File, Progress, Error> {
         sipper(async move |mut sender| {
             let _url = url;
 
@@ -688,7 +688,7 @@ mod tests {
     async fn it_composes_nicely() {
         use futures::stream::{FuturesOrdered, StreamExt};
 
-        fn download_all<'a>(urls: &'a [&str]) -> impl Sipper<Vec<File>, (usize, Progress)> + 'a {
+        fn download_all(urls: &[&str]) -> impl Sipper<Vec<File>, (usize, Progress)> {
             sipper(|sender| {
                 urls.iter()
                     .enumerate()
