@@ -494,6 +494,7 @@ mod tests {
 
     use tokio::task;
     use tokio::test;
+    use tokio::time;
 
     #[derive(Debug, PartialEq, Eq)]
     struct File(Vec<u8>);
@@ -712,5 +713,29 @@ mod tests {
 
         assert_eq!(i, 202);
         assert_eq!(files, vec![File(vec![1, 2, 3, 4]), File(vec![1, 2, 3, 4])]);
+    }
+
+    #[test]
+    async fn it_prioritizes_output_over_progress() {
+        let mut infinite_progress = sipper(|progress| async move {
+            drop(task::spawn({
+                let mut progress = progress.clone();
+
+                async move {
+                    loop {
+                        progress.send(0).await;
+
+                        time::sleep(time::Duration::from_secs(1)).await;
+                    }
+                }
+            }));
+
+            true
+        })
+        .pin();
+
+        while infinite_progress.sip().await.is_some() {}
+
+        assert!(infinite_progress.await);
     }
 }
