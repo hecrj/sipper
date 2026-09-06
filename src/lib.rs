@@ -307,9 +307,7 @@ pub use futures::{Future, FutureExt, Sink, Stream, StreamExt};
 
 /// A sipper is both a [`Stream`] that produces a bunch of progress
 /// and a [`Future`] that produces some final output.
-pub trait Sipper<Output, Progress = Output>:
-    core::Core<Output = Output, Progress = Progress>
-{
+pub trait Sipper<Output, Progress = Output>: core::Core<Output = Output, Item = Progress> {
     /// Maps the progress of the [`Sipper`] with the given closure.
     ///
     /// This is analogous to `map` in many other types; but we use `with`
@@ -367,7 +365,7 @@ pub trait Sipper<Output, Progress = Output>:
 }
 
 impl<T, Output, Progress> Sipper<Output, Progress> for T where
-    T: core::Core<Output = Output, Progress = Progress>
+    T: core::Core<Output = Output, Item = Progress>
 {
 }
 

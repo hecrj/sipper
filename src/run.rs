@@ -16,7 +16,7 @@ pin_project! {
         sipper: S,
         #[pin]
         on_progress: Si,
-        state: State<S::Progress>,
+        state: State<S::Item>,
     }
 }
 
@@ -41,9 +41,9 @@ enum State<T> {
 impl<S, Si> Future for Run<S, Si>
 where
     S: Core,
-    Si: Sink<S::Progress>,
+    Si: Sink<S::Item>,
 {
-    type Output = <S as Core>::Output;
+    type Output = S::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         use futures::ready;

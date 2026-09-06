@@ -33,7 +33,7 @@ impl<S, F, A> Future for With<S, F, A>
 where
     S: Core,
 {
-    type Output = <S as Core>::Output;
+    type Output = S::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         let this = self.project();
@@ -44,7 +44,7 @@ where
 impl<S, F, A> Stream for With<S, F, A>
 where
     S: Core,
-    F: FnMut(S::Progress) -> A,
+    F: FnMut(S::Item) -> A,
 {
     type Item = A;
 
