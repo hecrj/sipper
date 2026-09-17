@@ -15,7 +15,7 @@ pin-project-lite = "0.2"
 
 [dev-dependencies]
 tokio.version = "1.43"
-tokio.features = ["rt", "macros", "time"]
+tokio.features = ["rt", "macros", "time", "sync"]
 
 [lints]
 workspace = true

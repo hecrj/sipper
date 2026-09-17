@@ -431,8 +431,6 @@ where
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
         ) -> task::Poll<Option<Self::Item>> {
-            use futures::ready;
-
             let mut this = self.project();
 
             if !*this.is_progress_finished {
@@ -449,7 +447,29 @@ where
                 return task::Poll::Ready(None);
             }
 
-            *this.output = Some(ready!(this.future.poll(cx)));
+            let output = match this.future.poll(cx) {
+                task::Poll::Ready(output) => output,
+                // The future may have produced progress into the
+                // receiver while this poll was running, and the poll
+                // above ran before it did: recheck the receiver, so
+                // the progress is delivered by this poll, and not
+                // held until the next wake of the sipper.
+                task::Poll::Pending => {
+                    if !*this.is_progress_finished {
+                        match this.receiver.as_mut().poll_next(cx) {
+                            task::Poll::Ready(None) => {
+                                *this.is_progress_finished = true;
+                            }
+                            task::Poll::Ready(progress) => return task::Poll::Ready(progress),
+                            task::Poll::Pending => {}
+                        }
+                    }
+
+                    return task::Poll::Pending;
+                }
+            };
+
+            *this.output = Some(output);
 
             if *this.is_progress_finished {
                 task::Poll::Ready(None)
@@ -615,6 +635,56 @@ mod tests {
         }
 
         assert!(finished);
+    }
+
+    /// A progress item the producer sends while the sipper is polling
+    /// is delivered by that poll, and not held until the next wake of
+    /// the sipper, that may never come.
+    #[test]
+    async fn progress_sent_during_a_poll_is_delivered_without_a_wake() {
+        use futures::task::{Context, Poll, noop_waker};
+
+        // The producer sends the first progress and blocks, awaiting
+        // a wake that the test will not send.
+        let (wake, awake) = tokio::sync::oneshot::channel();
+
+        let mut run = sipper(async move |mut sender: crate::Sender<String>| {
+            sender.send("a".to_owned()).await;
+
+            awake.await.unwrap();
+
+            sender.send("b".to_owned()).await;
+        })
+        .pin();
+
+        // The sipper is polled with a waker that never wakes: the
+        // producer sends `a` and blocks.
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // `a` is delivered by the poll the producer sent it in, and
+        // not held until a wake that never comes.
+        match run.as_mut().poll_next(&mut cx) {
+            Poll::Ready(Some(progress)) => assert_eq!(progress, "a"),
+            Poll::Ready(None) => panic!("the sipper ended without its first progress"),
+            Poll::Pending => panic!("the first progress is held for a wake that never comes"),
+        }
+
+        wake.send(()).unwrap();
+
+        // The producer is awoken and finishes: its second progress
+        // and the end follow.
+        let mut lines = Vec::new();
+
+        loop {
+            match run.as_mut().poll_next(&mut cx) {
+                Poll::Ready(Some(line)) => lines.push(line),
+                Poll::Ready(None) => break,
+                Poll::Pending => continue,
+            }
+        }
+
+        assert_eq!(lines, ["b"]);
     }
 
     #[test]
