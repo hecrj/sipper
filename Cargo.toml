@@ -1,6 +1,6 @@
 [package]
 name = "sipper"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 authors = ["Héctor Ramón Jiménez <hector@hecrj.dev>"]
